@@ -221,28 +221,31 @@ gen.peer <- function(num.factors, intensities, use.covariates, covariates)
     rownames(residuals.PEER) = rownames(intensities)
     colnames(residuals.PEER) = colnames(intensities)
 
-    if (require(readr))
+    write.csv(data.frame(residuals.PEER), file = paste("residuals_", num.factors, sep = "", ".csv"), row.names = FALSE)
+    write.csv(data.frame(PEER_getX(model)), file = paste("factor_", num.factors, sep = "", ".csv"), row.names = FALSE)
+    write.csv(data.frame(PEER_getW(model)), file = paste("weight_", num.factors, sep = "", ".csv"), row.names = FALSE)
+    write.csv(data.frame(PEER_getAlpha(model)), file = paste("precision_", num.factors, sep = "", ".csv"), row.names = FALSE)
+
+    if (require(Cairo))
     {
-        write_csv(data.frame(residuals.PEER), path = paste("residuals_", num.factors, sep = "", ".csv"))
-        write_csv(data.frame(PEER_getX(model)), path = paste("factor_", num.factors, sep = "", ".csv"))
-        write_csv(data.frame(PEER_getW(model)), path = paste("weight_", num.factors, sep = "", ".csv"))
-        write_csv(data.frame(PEER_getAlpha(model)), path = paste("precision_", num.factors, sep = "", ".csv"))
+        CairoPDF(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+        PEER_plotModel(model)
+        dev.off()
+
+        CairoPDF(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+        plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
+        dev.off()
     }
     else
     {
-        write.csv(data.frame(residuals.PEER), path = paste("residuals_", num.factors, sep = "", ".csv"))
-        write.csv(data.frame(PEER_getX(model)), path = paste("factor_", num.factors, sep = "", ".csv"))
-        write.csv(data.frame(PEER_getW(model)), path = paste("weight_", num.factors, sep = "", ".csv"))
-        write.csv(data.frame(PEER_getAlpha(model)), path = paste("precision_", num.factors, sep = "", ".csv"))
-    }
+        pdf(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+        PEER_plotModel(model)
+        dev.off()
 
-    CairoPDF(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
-    PEER_plotModel(model)
-    dev.off()
-
-    CairoPDF(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
-    plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
-    dev.off()
+        pdf(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+        plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
+        dev.off()
+    }    
 }
 
 #Calculate ratios.  Really needs work!
@@ -810,12 +813,12 @@ source("../common_functions.R")
 #colnames(targets1.sex.m)[1:2] <- c("Female", "Male")
 #cor.sex <- gen.cor(model.PEER_covariate, targets1.sex.m)
 
-targets1.rmreps$GAA1 %<>% as.numeric
-targets1.rmreps$GAA2 %<>% as.numeric 
+#targets1.rmreps$GAA1 %<>% as.numeric
+#targets1.rmreps$GAA2 %<>% as.numeric 
 targets1.gaa <- select(targets1.rmreps, Sample.Name, GAA1) %>% filter(!is.na(GAA1))
 cor.gaa <- gen.cor(model.PEER_covariate, targets1.gaa)
 
-targets1.rmreps$Onset %<>% as.numeric 
+#targets1.rmreps$Onset %<>% as.numeric 
 targets1.onset <- select(targets1.rmreps, Sample.Name, Onset) %>% filter(!is.na(Onset)) 
 cor.onset <- gen.cor(model.PEER_covariate, targets1.onset)
 
