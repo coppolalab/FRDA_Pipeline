@@ -55,4 +55,99 @@ rownames(residuals.PEER) = rownames(intensities)
 colnames(residuals.PEER) = colnames(intensities)
 ```
 
+There are several other outputs of PEER which are of importance.  The factor values from PEER can be directly supplied to limma as covariates for differential expression analysis.  The weights can be used to assess the relative importance of each factor.  The precision values for the factors can also be used to assess the importance of factors.  All of these outputs can be saved as tables:
 
+```
+write.csv(data.frame(residuals.PEER), file = paste("residuals_", num.factors, sep = "", ".csv"), row.names = FALSE)
+write.csv(data.frame(PEER_getX(model)), file = paste("factor_", num.factors, sep = "", ".csv"), row.names = FALSE)
+write.csv(data.frame(PEER_getW(model)), file = paste("weight_", num.factors, sep = "", ".csv"), row.names = FALSE)
+write.csv(data.frame(PEER_getAlpha(model)), file = paste("precision_", num.factors, sep = "", ".csv"), row.names = FALSE)
+```
+
+Finally, several plots can be made of PEER output.  However, it may be necessary to remove the known covariates, which is not done in this code.  The <code>CairoPDF</code> driver from the <code>Cairo</code> package offers much better graphics output on most systems that the default <code>pdf</code> driver.  This code checks if the <code>Cairo</code> package is available before attempting to use it:
+
+```
+if (require(Cairo))
+{
+    CairoPDF(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+    PEER_plotModel(model)
+    dev.off()
+
+    CairoPDF(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+    plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
+    dev.off()
+}
+else
+{
+    pdf(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+    PEER_plotModel(model)
+    dev.off()
+
+    pdf(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+    plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
+    dev.off()
+}    
+```
+
+The final function combines all of these steps together:
+
+```
+gen.peer <- function(num.factors, intensities, use.covariates, covariates)
+{
+    model = PEER() 
+    PEER_setNk(model, num.factors) 
+    PEER_setPhenoMean(model, as.matrix(t(intensities))) 
+    PEER_setAdd_mean(model, TRUE) 
+    if (use.covariates == TRUE)
+    {
+        PEER_setCovariates(model, as.matrix(covariates)) 
+    }
+    PEER_setNmax_iterations(model, 1000) 
+    PEER_update(model) 
+    residuals.PEER = t(PEER_getResiduals(model))
+    rownames(residuals.PEER) = rownames(intensities)
+    colnames(residuals.PEER) = colnames(intensities)
+
+    write.csv(data.frame(residuals.PEER), file = paste("residuals_", num.factors, sep = "", ".csv"), row.names = FALSE)
+    write.csv(data.frame(PEER_getX(model)), file = paste("factor_", num.factors, sep = "", ".csv"), row.names = FALSE)
+    write.csv(data.frame(PEER_getW(model)), file = paste("weight_", num.factors, sep = "", ".csv"), row.names = FALSE)
+    write.csv(data.frame(PEER_getAlpha(model)), file = paste("precision_", num.factors, sep = "", ".csv"), row.names = FALSE)
+
+    if (require(Cairo))
+    {
+        CairoPDF(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+        PEER_plotModel(model)
+        dev.off()
+
+        CairoPDF(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+        plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
+        dev.off()
+    }
+    else
+    {
+        pdf(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+        PEER_plotModel(model)
+        dev.off()
+
+        pdf(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
+        plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
+        dev.off()
+    }    
+}
+```
+
+**Using PEER in differential expression**
+
+Once you have computed the desired number of factors, you can use these factors as additional covariates in a linear model fitted with limma. The PEER factors can simply be load from the .csv file and the known covariates removed.  Note that this uses the <code>%>%</code> from <code>magrittr</code> and the <code>select</code> function from <code>dplyr</code>:
+
+<code>model.PEER_covariate <- read_csv("./factor_8.csv") %>% select(-(X1:X6))</code>
+
+The factors can then be joined with the covariates matrix:
+
+<code>model.full <- cbind(model.cov, model.PEER_covariate)</code>
+
+This matrix can then be supplied to the lmFit function as the covariate matrix.
+
+**Correcting gene expression data for effects of PEER factors**
+
+Methods such as network analysis and time series analysis require that the effects of these factors be removed.  This is most easily done by fitting the factors to a linear model and getting the residuals:
