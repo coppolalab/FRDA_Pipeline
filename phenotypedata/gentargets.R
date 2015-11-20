@@ -47,7 +47,7 @@ get.families <- function(row.vector)
 {
     raw.string <- c(row.vector["PIDN"], row.vector["Children"], row.vector["Parents"] , row.vector["Sibling"], row.vector["Nephew.Niece"], row.vector["Grandchild"])
     raw.string <- raw.string[!is.na(raw.string)]
-    raw.string %<>% str_replace(" ", "")
+    raw.string %<>% str_replace_all(" ", "") %>% sort
     final.string <- lapply(raw.string, str_split, ",") %>% unlist
 }
 
@@ -70,7 +70,7 @@ join.dups <- function(dup.vector, multiple.melt)
 {
     regex.vector <- paste("^", dup.vector, sep = "") %>% paste("$", sep = "") %>% paste(collapse = "|")
     dup.df <- filter(multiple.melt, grepl(regex.vector, L1))
-    final.PIDNs <- unique(dup.df$value) %>% as.character
+    final.PIDNs <- unique(dup.df$value) %>% as.character %>% sort
     return(final.PIDNs)
 }
 
@@ -81,7 +81,7 @@ fixdob <- filter(chop.1, grepl("@", dob)) %>% select(dob) %>% as.matrix %>% appl
 colnames(fixdob) <- c("Age", "Date")
 adjusteddob <- parse_date_time(fixdob[,2], "mdy", select_formats = my_select) 
 year(adjusteddob) <- year(adjusteddob) - as.numeric(fixdob[,1])
-chop.1$dob[str_detect(chop.1$dob, '@') & !is.na(chop.1$dob)] <- as.character(as.Date(adjusteddob))
+chop.1$dob[str_detect(chop.1$dob, '@') & !is.na(chop.1$dob)] <- as.character(as.Date(adjusteddob)) 
 
 chop.2 <- read.xlsx("./Current_Request 2_Copy of chop_missing.xlsx")
 chop.2$dob %<>% str_replace("age ", "") 
@@ -115,7 +115,7 @@ ucla.3$DOB <- parse_date_time(ucla.3$DOB, c("mdy", "ymd")) %>% as.Date %>% as.ch
 ucla.3.reduce <- select(ucla.3, PIDN, Sex, Status, DOB, Onset, GAA1, GAA2)
 
 #chop.all <- rbind(select(chop.1, -Order), select(chop.2, -Notes))
-chop.all <- read.xlsx("./Phenotype Data 2015-11-13.xlsx", detectDates = FALSE)
+chop.all <- read.xlsx("./Phenotype Data 2015-11-19.xlsx", detectDates = FALSE)
 chop.all$DOB %<>% parse_date_time("mdy") %>% as.Date %>% as.character
 
 full.list <- apply(chop.all, 1, get.families)
@@ -132,8 +132,6 @@ dup.PIDN <- multiple.melt[dup.melt,]$value %>% unique
 dup.blocks <- lapply(dup.PIDN, get.blocks, multiple.melt)
 joined.blocks <- lapply(dup.blocks, join.dups, multiple.melt)
 joined.blocks <- joined.blocks[!duplicated(joined.blocks)]
-joined.blocks[[16]] <- c(joined.blocks[[16]], joined.blocks[[17]]) %>% unique
-joined.blocks <- joined.blocks[-17]
 dup.df <- melt(joined.blocks)
 final.block <- max(dup.df$L1) + 1
 
@@ -152,16 +150,16 @@ families.df <- rbind(multiple.all, one.df)
 chop.families <- join(chop.all, families.df) %>% select(PIDN:GAA2, Family)
 final.block3 <- max(chop.families$Family) + 1
 
-chop.3.reduce$Family <- final.block3:(final.block3 + nrow(chop.3.reduce) - 1)
-chop.families.all <- rbind(chop.families, chop.3.reduce)
-chop.families.all$Site <- "CHOP"
-final.block4 <- max(chop.families.all$Family) + 1
+#chop.3.reduce$Family <- final.block3:(final.block3 + nrow(chop.3.reduce) - 1)
+#chop.families.all <- rbind(chop.families, chop.3.reduce)
+#chop.families.all$Site <- "CHOP"
+#final.block4 <- max(chop.families.all$Family) + 1
 
 ucla.rbind <- rbind(ucla.1, ucla.2) %>% select(PIDN, sex, Status, dob, onset, gaa1, gaa2) 
 colnames(ucla.rbind) <- c("PIDN", "Sex", "Status", "DOB", "Onset", "GAA1", "GAA2")
 ucla.all <- rbind(ucla.rbind, ucla.3.reduce)
 ucla.all$PIDN %<>% str_replace("FA_", "")
-ucla.all$Family <- final.block4:(final.block4 + nrow(ucla.all) - 1)
+ucla.all$Family <- final.block3:(final.block3 + nrow(ucla.all) - 1)
 ucla.all$Site <- "UCLA"
 
 subjects.reduce <- rbind(chop.families.all, ucla.all)
@@ -209,7 +207,7 @@ targets.final[reps.conditions,]$RIN <- filter(targets.final, grepl(reps.names, S
 targets.final[reps.conditions,]$RNA.ID <- filter(targets.final, grepl(reps.names, Sample.Name) & Sample.Num != "1r")$RNA.ID
 
 #Fix some PIDNs which changed
-replace.PIDNs <- data.frame(Orig = c("6237", "6247", "6236", "6122", "6415", "6418"), New = c("4756", "4757", "4763", "4257", "4759", "206"))
+replace.PIDNs <- data.frame(Orig = c("6237", "6247", "6236", "6122", "6415", "6418", "6025"), New = c("4756", "4757", "4763", "4257", "4759", "206", "6074"))
 replace.PIDNs.key <- paste(replace.PIDNs$Orig, collapse = "|")
 old.PIDNs <- targets.final[grepl(replace.PIDNs.key, targets.final$PIDN),]$PIDN
 targets.final[grepl(replace.PIDNs.key, targets.final$PIDN),]$PIDN <- as.character(replace.PIDNs[match(old.PIDNs, replace.PIDNs$Orig),]$New)
@@ -259,4 +257,7 @@ targets.final$Sample.Name %<>% str_split("_") %>% llply(function(x) { return(x[-
 targets.final$Sample.Name %<>% paste(targets.final$Sample.Num, str_sub(targets.final$Status, 1, 3), sep = "_") 
 targets.final$Draw.Age <- as.Date(targets.final$Date.Drawn) - as.Date(targets.final$DOB)
 
+targets.dates.out <- filter(targets.final, Site == "CHOP") %>% select(Sample.Name, PIDN, Sample.Num, Date.Drawn)
+write.xlsx(targets.dates.out, "targets.dates.out.xlsx")
 save(targets.final, file = "./targets.final.rda")
+

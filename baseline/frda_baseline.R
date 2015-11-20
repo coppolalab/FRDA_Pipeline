@@ -24,6 +24,7 @@ library(marray)
 library(limma)
 library(MASS)
 library(matrixStats)
+library(lumiHumanIDMapping)
 library(lumi)
 
 #For batch correction and PEER
@@ -271,9 +272,9 @@ gen.ratios <- function(dataset, targetset)
 }
 
 #Generate fit object
-gen.fit <- function(dataset, model.design)
+gen.fit <- function(dataset, model.design, correlation.vector, block.vector)
 {
-    fit <- lmFit(dataset, model.design)
+    fit <- lmFit(dataset, design = model.design, correlation = correlation.vector, block = block.vector)
     contrasts.anova <- makeContrasts(time1.carrier_vs_time1.control = Carrier - Control, time1.patient_vs_time1.control = Patient - Control, time1.patient_vs_time1.carrier = Patient - Carrier, levels = model.design)
     fit2.anova <- contrasts.fit(fit, contrasts.anova)
     fitb <- eBayes(fit2.anova)
@@ -335,7 +336,7 @@ gen.tables <- function(dataset, results, annot, ratio.exp, suffix)
     fitsel.pca <- select(fitsel.ratio2, Accession, Symbol, Definition, matches("Coef.Patient vs. Carrier"), matches("Coef.Patient vs. Control"), matches("Coef.Carrier vs. Control")) %>% mutate(pca.abs) %>% arrange(desc(pca.abs)) %>% select(-pca.abs)
     gen.small.workbook(fitsel.pca, paste("./significant_geneList_", suffix, "_time1_pca.xlsx", sep = ""))
 
-    #write_csv(fitsel.ratio.all, path = paste("./complete_genelist_time1_", suffix, ".csv", sep = ""))
+    write_csv(fitsel.ratio.all, path = paste("./complete_genelist_time1_", suffix, ".csv", sep = ""))
     return(fitsel.return)
 }
 
@@ -560,44 +561,59 @@ enrichr.wkbk <- function(database, full.df, colname, subdir, direction)
 
 load("../phenotypedata/targets.final.rda")
 
+#Note: Soon to be deprecated in favor of lumi. 
 #Read in old intensities and detection p-values and make columns names consistent targets table
-intensities.old <- read_csv("../raw_data/chop_rawData_639samples.csv") #Load raw .csv
+intensities.old <- read_csv("../old raw/chop_rawData_639samples.csv") #Load raw .csv
 intensities.old %<>% select(-1) #Remove extra column
 colnames(intensities.old)[-1] %<>% str_replace("X", "") #Remove "X" from from front of Slide ids
-detectionscore.old <- read_csv("../raw_data/chop_detcsoPval_639samples.csv")
+detectionscore.old <- read_csv("../old raw/chop_detcsoPval_639samples.csv")
 detectionscore.old %<>% select(-1)
 colnames(detectionscore.old)[-1] %<>% str_replace("X", "")
 
 #Read in new raw file, extract intensity and p-value columns, and rename
-data.new <- read_csv("../raw_data/2014-278 Sample probe profile.csv") 
-write.table(data.new, file = "../raw_data/2014-278.tsv", sep = "\t", row.names = FALSE)
-#CairoPDF("lumi", width = 50, height = 50)
-#plot(lumi.text, what = "sampleRelation", method = "mds")
-#dev.off()
-#vst.plot <- plotVST(lumi.vst)
-#matplot(log2(vst.plot$untransformed), vst.plot$transformed)
+data.new <- read_csv("../old raw/2014-278 Sample probe profile.csv") 
+#write.table(data.new, file = "../raw_data/2014-278.tsv", sep = "\t", row.names = FALSE) #Convert back to tab separated table for lumi.  
 
 data.new %<>% select(-SYMBOL, -(SEARCH_KEY:ACCESSION))
 colnames(data.new)[1] <- "Probe"
 intensities.new <- select(data.new, Probe, contains("AVG_Signal"))
 colnames(intensities.new)[-1] %<>% str_replace(".AVG_Signal", "")
-write.csv(intensities.new, "intensities.new.csv", row.names = FALSE)
 detectionscore.new <- select(data.new, Probe, contains("Detection Pval"))
 colnames(detectionscore.new)[-1] %<>% str_replace(".Detection Pval", "")
 
-data.newer <- read_csv("../raw_data/2015-9185 Sample probe profile.csv")
-write.table(data.newer, file = "../raw_data/2015-9185.tsv", sep = "\t", row.names = FALSE)
+#Read even newer raw file
+data.newer <- read_csv("../old raw/2015-9185 Sample probe profile.csv")
+#write.table(data.newer, file = "../raw_data/2015-9185.tsv", sep = "\t", row.names = FALSE) #Convert back to tab separated table for lumi. 
+
 data.newer %<>% select(-SYMBOL, -(SEARCH_KEY:ACCESSION))
 colnames(data.newer)[1] <- "Probe"
 intensities.newer <- select(data.newer, Probe, contains("AVG_Signal"))
 colnames(intensities.newer)[-1] %<>% str_replace(".AVG_Signal", "")
-write.csv(intensities.newer, "intensities.newer.csv", row.names = FALSE)
+
 detectionscore.newer <- select(data.newer, Probe, contains("Detection Pval"))
 colnames(detectionscore.newer)[-1] %<>% str_replace(".Detection Pval", "")
 
+#Drop duplicate arrays
+bad.slides <- c("3998573091_J", "3998573091_L", "3998582035_G") %>% paste(collapse = "|")
+intensities.newer %<>% select(-matches(bad.slides))
+detectionscore.newer %<>% select(-matches(bad.slides))
+targets.final %<>% filter(!grepl(bad.slides, Slide.ID))
+
+#Convert another profile.  Note that this profile contains samples from other experiments!
 raw.2011.018 <- read_csv("../raw_data/2011-018 sample probe profile 2015.csv")
 write.table(raw.2011.018, file = "../raw_data/2011-018.tsv", sep = "\t", row.names = FALSE)
 
+#Merge old and new intensities into one data frame.  This currently results in probes being dropped because they are missing in some files and not others.  Needs attention from Joe!
+intensities <- merge(intensities.old, intensities.new) %>% merge(intensities.newer)
+rownames(intensities) <- intensities$Probe
+intensities %<>% select(-Probe)
+detectionscore.pvalue <- merge(detectionscore.old, detectionscore.new) %>% merge(detectionscore.newer)
+rownames(detectionscore.pvalue) <- detectionscore.pvalue$Probe
+detectionscore.pvalue %<>% select(-Probe)
+#End of deprecated code - other parts of the code will change as well and will be noted
+
+#New analyses should start here
+#Note: Probe profiles in .csv format need to be converted to .tsv files because lumi produces errors when reading .csvs
 filenames <- list.files("../raw_data/", pattern = "*.txt|*.tsv", full.names = TRUE)
 intensities.list <- lapply(filenames, read_tsv)
 missingbeads <- function(intensities)
@@ -609,22 +625,13 @@ lapply(intensities.list, missingbeads)
 intensities.mat <- reduce(intensities.list, merge)
 write.table(intensities.mat, "../raw_data/all_batches.tsv", sep = "\t", row.names = FALSE)
 
-lumi.text <- lumiR("../raw_data/2015-9185.tsv", lib.mapping = "lumiHumanIDMapping", checkDupId = TRUE, convertNuID = TRUE)
-lumi.vst <- lumiT(lumi.text)
+lumi.raw <- lumiR("../raw_data/all_batches.tsv", lib.mapping = "lumiHumanIDMapping", checkDupId = TRUE, convertNuID = TRUE)
+lumi.vst <- lumiT(lumi.raw)
 lumi.norm <- lumiN(lumi.vst, method = "rsn")
-lumi.qual <- lumiQ(lumi.norm, detectionTh = 0.01)
-test.cutoff <- detectionCall(lumi.qual)
+lumi.qual <- lumiQ(lumi.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
+lumi.cutoff <- detectionCall(lumi.qual)
 test.expr <- exprs(lumi.qual)[which(test.cutoff > 0),]
 symbols.test <- getSYMBOL(rownames(test.expr), 'lumiHumanAll.db')
-
-#Merge old and new intensities into one data frame.  This currently results in probes being dropped because they are missing in some files and not others.  Needs attention from Joe!
-intensities <- merge(intensities.old, intensities.new) %>% merge(intensities.newer)
-#write.csv(missingarray, "missingarray.csv")
-rownames(intensities) <- intensities$Probe
-intensities %<>% select(-Probe)
-detectionscore.pvalue <- merge(detectionscore.old, detectionscore.new) %>% merge(detectionscore.newer)
-rownames(detectionscore.pvalue) <- detectionscore.pvalue$Probe
-detectionscore.pvalue %<>% select(-Probe)
 
 #Dynamically assign column names by matching slide Ids to sample names.
 colnames.new.index <- match(colnames(intensities), targets.final$Slide.ID)
@@ -651,7 +658,7 @@ saveRDS.gz(intensities.known, file = "./save/intensities.known.rda")
 saveRDS.gz(detectionscore.pvalue.known, file = "./save/detectionscore.pvalue.known.rda")
 
 #Load annotated array targets data from Illumina
-annot <- read_tsv("../raw_data/HumanHT-12_V4_0_R2_15002873_B.txt") 
+annot <- read_tsv("../Annotation//HumanHT-12_V4_0_R2_15002873_B.txt") 
 saveRDS.gz(annot, file = "./save/annot.rda")
 
 #Extract baseline measurements only.  There are multiple time points, based upon the sample number 
@@ -662,11 +669,16 @@ saveRDS.gz(targets1, file = "./save/targets1.rda")
 saveRDS.gz(intensities1, file = "./save/intensities1.rda")
 saveRDS.gz(detectionscore.pvalue1, file = "./save/detectionscore.pvalue1.rda")
 
+#To be deprecated with lumi
+#Normalization at this step will be unnecessary because it will already be normalized by lumi
 #Log2 transform intensities, subtract detection score p-values from 1
-intensities1.log2 <- as.matrix(log2(intensities1))
+intensities1.log2 <- as.matrix(log2(intensities1)) 
+#End of deprecated code
 detectionscore1 <- 1 - detectionscore.pvalue1
 saveRDS.gz(detectionscore1, file = "./save/detectionscore1.rda")
 
+#To be deprecated with lumi
+#These figures will need to be plotted differently when lumi is used
 #Make boxplots of detectionscore and raw intensities
 batch.colors <- c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green", "blue4", "red4")
 gen.boxplot("1_base_signal.jpg", intensities1.log2, targets1, batch.colors, "Signal intensity not normalized", "Intensity")
@@ -684,6 +696,7 @@ gen.sdplot("2_base_IAC_sd", IAC, "label-1 samples")
 #Normalize intensities between arrays with quantile normalization
 intensities1.norm <- normalizeBetweenArrays(as.matrix(intensities1.log2), method = "quantile")
 saveRDS.gz(intensities1.norm, file = "./save/intensities1.norm.rda")
+#End of deprecated code
 
 #Regenerate plots
 gen.boxplot("3_base_intensity_norm.jpg", intensities1.norm, targets1, batch.colors, "Quantile normalized signal intensity", "Intensity")
@@ -714,7 +727,7 @@ saveRDS.gz(heatmap.bars1.rm1, file = "./save/heatmap.bars1.rm1.rda")
 gen.heatmap("5_base_heatmap_rm1_notNorm", intensities1.rm1, targets1.rm1, heatmap.bars1.rm1, "Clustering Based on Inter-Array Pearson Coefficient, not normalized")
 
 #Renormalize and regenerate plots
-intensities1.norm.rm1 <- normalizeBetweenArrays(as.matrix(intensities1.rm1), method = "quantile")
+intensities1.norm.rm1 <- normalizeBetweenArrays(as.matrix(intensities1.rm1), method = "quantile") #This will be changed with lumi!
 gen.boxplot("5_base_intensity_norm_rm1.jpg", intensities1.norm.rm1, targets1.rm1, batch.colors, "Quantile normalized signal intensity, exclude 1 sample", "Intensity") 
 gen.heatmap("5_base_heatmap_norm_rm1", intensities1.norm.rm1, targets1.rm1, heatmap.bars1.rm1, "Clustering Based on Inter-Array Pearson Coefficient, Quantile normalized")
 IAC.norm.rm1 <- gen.IACcluster("5_base_IAC_norm_rm1", intensities1.norm.rm1, "Outlier removed")
@@ -749,7 +762,7 @@ heatmap.bars1.rmreps <- slice(data.frame(heatmap.bars1.rm1), -match(remove.names
 saveRDS.gz(targets1.rmreps, file = "./save/targets1.rmreps.rda")
 
 #Renormalize and regenerate plots
-intensities1.rmreps <- normalizeBetweenArrays(as.matrix(intensities1.rmreps), method = "quantile")
+intensities1.rmreps <- normalizeBetweenArrays(as.matrix(intensities1.rmreps), method = "quantile") #This will be changed with Lumi
 gen.boxplot("6_base_intensity_rmreps.jpg", intensities1.rmreps, targets1.rmreps, batch.colors, "Quantile normalized signal intensity, exclude replicates", "Intensity")
 gen.heatmap("6_base_heatmap_rmreps", intensities1.rmreps, targets1.rmreps, heatmap.bars1.rmreps, "Clustering Based on Inter-Array Pearson Coefficient, Quantile normalized")
 IAC.rmreps <- gen.IACcluster("6_base_IAC_rmreps", intensities1.rmreps, "Replicates removed")
@@ -767,6 +780,7 @@ cm1.rmreps <- cmdscale(top1000.dist.rmreps, eig = TRUE)
 gen.pca("6_base_MDS_Status_rmreps", cm1.rmreps, targets1.rmreps, diagnosis.colors, "Status")
 gen.pca("6_base_MDS_Batch_rmreps", cm1.rmreps, targets1.rmreps, batch.colors, "Batch")
 
+#Everything from here should remain unchanged
 #Use ComBat for batch effect correction
 model.status <- model.matrix( ~ 0 + factor(targets1.rmreps$Status) )
 colnames(model.status) <- c("Carrier", "Control", "Patient")
@@ -804,21 +818,9 @@ colnames(model.PEER_covariate) <- paste("X", 1:ncol(model.PEER_covariate), sep =
 
 source("../common_functions.R")
 
-#targets1.age <- filter(targets1.rmreps, !is.na(Draw.Age)) %>% select(Sample.Name, Draw.Age)
-#targets1.age$Draw.Age %<>% as.numeric
-#cor.age <- gen.cor(model.PEER_covariate, targets1.age)
-
-#targets1.sex <- filter(targets1.rmreps, Sex != "UNKNOWN")
-#targets1.sex.m <- model.matrix( ~ 0 + factor(targets1.sex$Sex) ) %>% data.frame %>% mutate(Sample.Name = targets1.sex$Sample.Name)
-#colnames(targets1.sex.m)[1:2] <- c("Female", "Male")
-#cor.sex <- gen.cor(model.PEER_covariate, targets1.sex.m)
-
-#targets1.rmreps$GAA1 %<>% as.numeric
-#targets1.rmreps$GAA2 %<>% as.numeric 
 targets1.gaa <- select(targets1.rmreps, Sample.Name, GAA1) %>% filter(!is.na(GAA1))
 cor.gaa <- gen.cor(model.PEER_covariate, targets1.gaa)
 
-#targets1.rmreps$Onset %<>% as.numeric 
 targets1.onset <- select(targets1.rmreps, Sample.Name, Onset) %>% filter(!is.na(Onset)) 
 cor.onset <- gen.cor(model.PEER_covariate, targets1.onset)
 
@@ -844,10 +846,6 @@ CairoPDF("./PEER_weights", height = 4, width = 6)
 print(p)
 dev.off()
 
-##Export full dataset for WGCNA
-#intensities.log2 <- as.matrix(log2(intensities))
-#IAC.all <- gen.IACcluster("../WGCNA/IAC_all.pdf")
-
 #Calculate ratios for use in tables
 ratio.exp <- gen.ratios(intensities1.combat, targets1.rmreps)
 saveRDS.gz(ratio.exp, file = "./save/ratio.exp.rda")
@@ -856,7 +854,8 @@ saveRDS.gz(ratio.exp, file = "./save/ratio.exp.rda")
 model.cov <- cbind(model.status, Male = model.sex.reduce, Age = log2(as.numeric(targets1.rmreps$Draw.Age)), RIN = log2(targets1.rmreps$RIN))
 model.full <- cbind(model.cov, model.PEER_covariate)
 
-fit.object <- gen.fit(intensities1.combat, model.full)
+block.correlation <- duplicateCorrelation(intensities1.combat, design = select(model.full, Carrier:Patient), block = targets1.rmreps$Family)
+fit.object <- gen.fit(intensities1.combat, model.full, targets1.rmreps$Family)
 saveRDS.gz(fit.object, file = "./save/fit.object.rda")
 
 #Generate statisical cutoff
@@ -880,6 +879,7 @@ fit.selection.fdr <- gen.tables(de.object.fdr, results.fdr, annot, ratio.exp, "f
 saveRDS.gz(fit.selection, file = "./save/fit.object.rda")
 saveRDS.gz(fit.selection.fdr, file = "./save/fit.object.fdr.rda")
 
+#Export tables for comparison to Van Hauten
 ourgenes <- select(fit.selection.fdr, Accession:Definition, Coef.time1.patient_vs_time1.control, p.value.time1.patient_vs_time1.control, p.value.adj.time1.patient_vs_time1.control, Res.time1.patient_vs_time1.control) #%>% filter(Res.time1.patient_vs_time1.control != 0)
 write_csv(ourgenes, "ourgenes.csv")
 
@@ -894,15 +894,6 @@ gen.venndiagram("./8_venn_fdr", results.fdr)
 gen.anova(fit.selection, "none")
 gen.anova(fit.selection.fdr, "fdr")
 
-##Repair
-full.data <- read_csv("./complete_genelist_time1_fdrLess01.csv")
-#fulldata.cc <- select(full.data, Probe_Id, Coef.time1.carrier_vs_time1.control, p.value.time1.carrier_vs_time1.control, p.value.adj.time1.carrier_vs_time1.control, A)
-#fulldata.pc <- select(full.data, Probe_Id, Coef.time1.patient_vs_time1.control, p.value.time1.patient_vs_time1.control, p.value.adj.time1.patient_vs_time1.control, A)
-#fulldata.pca <- select(full.data, Probe_Id, Coef.time1.patient_vs_time1.carrier, p.value.time1.patient_vs_time1.carrier, p.value.adj.time1.patient_vs_time1.carrier, A)
-#colnames(fulldata.cc) <- c("probename", "logratio", "pvalue", "pvaluefdr", "average")
-#colnames(fulldata.pc) <- c("probename", "logratio", "pvalue", "pvaluefdr", "average")
-#colnames(fulldata.pca) <- c("probename", "logratio", "pvalue", "pvaluefdr", "average")
-
 #Enrichr
 source("../GO/enrichr.R")
 enrichr.nofdr <- select(fit.selection, Probe_Id, Symbol, Res.time1.carrier_vs_time1.control, Res.time1.patient_vs_time1.control, Res.time1.patient_vs_time1.carrier)
@@ -914,7 +905,9 @@ enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_20
 lapply(comparison.cols, enrichr.submit, enrichr.fdr, enrichr.terms, "fdr")
 lapply(comparison.cols, enrichr.submit, enrichr.nofdr, enrichr.terms, "nofdr")
 
+#Move to a separate file
 #Outlier analysis
+#This needs to be changed to use limma instead of linear algebra parlor tricks!
 PEER.factors <- read_csv("./factor_8.csv") %>% select(-X1, -X2, -X6)
 PEER.weights.outlier <- read_csv("./weight_8.csv") %>% select(-X1, -X2, -X6)
 PEER.residuals <- as.matrix(PEER.factors) %*% t(as.matrix(PEER.weights.outlier)) %>% t
@@ -935,11 +928,11 @@ saveRDS.gz(normalized, file = "./save/normalized.rda")
 
 normalized.3.sorted <- lapply(normalized.3, arrange, Control, desc(Patient), desc(Carrier)) %>% lapply(slice, c(1:4))
 names(normalized.3.sorted) <- c("above", "below")
-test <- lapply(names(normalized.3.sorted), split.outliers, normalized.3.sorted)
+lapply(names(normalized.3.sorted), split.outliers, normalized.3.sorted)
 
-test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
-names(test) <- ls()
-unlist(test) %>% sort
+objects.size <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
+names(objects.size) <- ls()
+unlist(objects.size) %>% sort
 
 #PCA Analysis of DE genes
 fdr.pca <- filter(fit.selection.fdr, Res.time1.patient_vs_time1.carrier != 0) 
@@ -951,9 +944,6 @@ fdr.pco <- filter(fit.selection.fdr, Res.time1.patient_vs_time1.control != 0)
 fdr.pco.coef <- select(fdr.pco, contains("_Pat")) %>% dist %>% cmdscale(eig = TRUE)
 fdr.pco.res <- select(fdr.pco, Res.time1.patient_vs_time1.control) %>% as.matrix %>% as.vector
 de.pca(fdr.pco.coef, fdr.pco.res, "fdr_patient_vs_control")
-#fdr.pco.genes <- select(fdr.pco, Probe_Id:Definition, Res.time1.patient_vs_time1.carrier) 
-#fdr.pco.genes <- data.frame(fdr.pco.genes, fdr.pco.coef$points) %>% filter(X2 > 0)
-#write.xlsx(fdr.pco.genes, "fdr.pco.genes.xlsx")
 
 fdr.cc <- filter(fit.selection.fdr, Res.time1.carrier_vs_time1.control != 0) 
 fdr.cc.coef <- select(fdr.cc, contains("_Car")) %>% dist %>% cmdscale(eig = TRUE)
@@ -965,15 +955,10 @@ nofdr.pca.coef <- select(nofdr.pca, contains("_vs_carr")) %>% dist %>% cmdscale(
 nofdr.pca.res <- select(nofdr.pca, Res.time1.patient_vs_time1.carrier) %>% as.matrix %>% as.vector
 de.pca(nofdr.pca.coef, nofdr.pca.res, "nofdr_patient_vs_carrier")
 
-#source("../GO/enrichr.R")
 nofdr.pco <- filter(fit.selection, Res.time1.patient_vs_time1.control != 0) 
 nofdr.pco.coef <- select(nofdr.pco, contains("_Pat")) %>% dist %>% cmdscale(eig = TRUE)
 nofdr.pco.res <- select(nofdr.pco, Res.time1.patient_vs_time1.control) %>% as.matrix %>% as.vector
 de.pca(nofdr.pco.coef, nofdr.pco.res, "nofdr_patient_vs_control")
-#nofdr.pco.genes <- select(nofdr.pco, Probe_Id:Definition, Res.time1.patient_vs_time1.control) %>% filter(Res.time1.patient_vs_time1.control == 1)
-#get.stringdbimage(nofdr.pco.genes)
-#nofdr.pco.genes <- data.frame(nofdr.pco.genes, nofdr.pco.coef$points) %>% filter(X2 > -5, X1 < -20, Res.time1.patient_vs_time1.control == 1)
-#write.xlsx(nofdr.pco.genes, "nofdr.pco.genes.xlsx")
 
 nofdr.cc <- filter(fit.selection, Res.time1.carrier_vs_time1.control != 0) 
 nofdr.cc.coef <- select(nofdr.cc, contains("_Car")) %>% dist %>% cmdscale(eig = TRUE)
@@ -993,3 +978,5 @@ de.pca <- function(object.coef, vector.results, filename)
     print(p)
     dev.off()
 }
+
+
