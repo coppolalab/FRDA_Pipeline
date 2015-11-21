@@ -25,6 +25,8 @@ library(limma)
 library(MASS)
 library(matrixStats)
 library(lumiHumanIDMapping)
+library(lumiHumanAll.db)
+library(annotate)
 library(lumi)
 
 #For batch correction and PEER
@@ -625,13 +627,33 @@ lapply(intensities.list, missingbeads)
 intensities.mat <- reduce(intensities.list, merge)
 write.table(intensities.mat, "../raw_data/all_batches.tsv", sep = "\t", row.names = FALSE)
 
-lumi.raw <- lumiR("../raw_data/all_batches.tsv", lib.mapping = "lumiHumanIDMapping", checkDupId = TRUE, convertNuID = TRUE)
-lumi.vst <- lumiT(lumi.raw)
-lumi.norm <- lumiN(lumi.vst, method = "rsn")
+lumi.raw <- lumiR("../raw_data/all_batches.tsv", lib.mapping = "lumiHumanIDMapping", checkDupId = TRUE, convertNuID = TRUE) #Read in the joined batches
+lumi.vst <- lumiT(lumi.raw) #Perform variance stabilized transformation
+lumi.norm <- lumiN(lumi.vst, method = "rsn") #Normalize with robust spline regression
 lumi.qual <- lumiQ(lumi.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
-lumi.cutoff <- detectionCall(lumi.qual)
-test.expr <- exprs(lumi.qual)[which(test.cutoff > 0),]
-symbols.test <- getSYMBOL(rownames(test.expr), 'lumiHumanAll.db')
+lumi.cutoff <- detectionCall(lumi.qual) #Get the count of probes which passed the detection threshold per sample
+lumi.expr <- lumi.qual[which(lumi.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
+symbols.lumi <- getSYMBOL(rownames(lumi.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
+lumi.expr.annot <- lumi.expr[!symbols.lumi,] #Drop any probe which is not annotated
+
+#Code for removing some bad slides. 
+bad.slides.split <- str_split(bad.slides, "\\|") %>% unlist
+bad.slides.cols <- match(bad.slides.split, colnames(lumi.expr.annot))
+lumi.expr.annot <- lumi.expr.annot[,-bad.slides.cols]
+
+#Note about subsetting: If using a lumi object, the expression values should NOT be extracted using exprs() until you have finished 
+#removing any samples (outliers, replicates, etc) or are about to plot.  The lumi object can be subsetted using normal matrix operations such 
+#as subset or `[]`.  This allows you to avoid the inconvenience of having to subset the expression matrix and targets table separately. 
+
+#This will eventually be the code that is used to subset the baseline data.  Currently it is only using one batch because of missing data. 
+test.pData <- filter(targets.final, SCGC.Code == "2015-9185") #Subset the targets data for the current batch
+colnames(test.pData)[4] <- "sampleID" #Use the sampleID as the name for the column with the slideIDs 
+rownames(test.pData) <- test.pData$sampleID #Set the row names to be the same as the sampleID (may be unnecessary)
+pData.index <- match(sampleNames(assayData(lumi.expr.annot)), test.pData$sampleID) #Get the correct order for the rows of the targets table based on the order of the columns in the expression data
+test.pData <- test.pData[pData.index,] #Resort the rows of the targets tabel to match the columns of the expression data 
+pData(lumi.expr.annot) <- test.pData #Add the targets table as phenotype data
+expr.baseline <- which(lumi.expr.annot$Sample.Num == "1") #Find the samples which are baseline (time point 1) samples
+lumi.baseline <- lumi.expr.annot[,expr.baseline]#Subset the entire lumi object to only include baseline samples
 
 #Dynamically assign column names by matching slide Ids to sample names.
 colnames.new.index <- match(colnames(intensities), targets.final$Slide.ID)
@@ -853,6 +875,7 @@ saveRDS.gz(ratio.exp, file = "./save/ratio.exp.rda")
 #Linear model fitting
 model.cov <- cbind(model.status, Male = model.sex.reduce, Age = log2(as.numeric(targets1.rmreps$Draw.Age)), RIN = log2(targets1.rmreps$RIN))
 model.full <- cbind(model.cov, model.PEER_covariate)
+saveRDS.gz(model.full, file = "./save/model.full.rda")
 
 block.correlation <- duplicateCorrelation(intensities1.combat, design = select(model.full, Carrier:Patient), block = targets1.rmreps$Family)
 fit.object <- gen.fit(intensities1.combat, model.full, targets1.rmreps$Family)
