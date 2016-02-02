@@ -239,8 +239,16 @@ subjects.reduce[hell.conditions,]$GAA1 <- NA
 subjects.reduce[is.na(subjects.reduce$GAA1),]$GAA1 <- subjects.reduce[is.na(subjects.reduce$GAA1),]$GAA2
 
 #subjects.out <- filter(subjects.all, Site == "CHOP") %>% select(FA_PatientID:dob, onset, gaa1, gaa2)
-#colnames(subjects.out) <- c("PIDN", "Sex", "Status", "DOB", "Onset", "GAA1", "GAA2")
-#write.xlsx(subjects.out, "subjects.out.xlsx")
+#colnames(subjects.out) <- c("PIDN", "Sex", "Status", "DOB", "Onset", "GAA1", "GAA2", "Family", "Center")
+gift.out <- subjects.reduce
+colnames(gift.out)[9] <- "Center"
+gift.out$PIDN <- paste("FA", gift.out$PIDN, sep = "_")
+gift.out$Center <- paste("FRDA", gift.out$Center, sep = "_")
+gift.out$Status <- paste("FRDA", gift.out$Status, sep = "_")
+gift.out$Status %<>% str_replace("FRDA_Unknown", "UNSPECIFIED") %>% str_replace("FRDA_UNKNOWN", "UNSPECIFIED")
+gift.out %<>% select(PIDN:GAA2, Center)
+write.xlsx(gift.out, "gift.out.xlsx")
+gift.PIDN <- paste(gift.out$PIDN, collapse = "|")
 
 targets.final <- join(targets.final, subjects.reduce)
 targets.final$Sample.Num %<>% factor
@@ -260,4 +268,11 @@ targets.final$Draw.Age <- as.Date(targets.final$Date.Drawn) - as.Date(targets.fi
 targets.dates.out <- filter(targets.final, Site == "CHOP") %>% select(Sample.Name, PIDN, Sample.Num, Date.Drawn)
 write.xlsx(targets.dates.out, "targets.dates.out.xlsx")
 save(targets.final, file = "./targets.final.rda")
+write.xlsx(targets.final, "./targets.final.xlsx")
 
+test <- read.xlsx("../../../../Downloads/dan_newpatients_20160120T193429.xlsx")
+missing.PIDN <- test[is.na(match(test$PIDN, gift.out$PIDN)),] 
+write.xlsx(missing.PIDN, "./missing.gift.PIDN.xlsx")
+
+test2 <- filter(test, match(PIDN, gift.out$PIDN))
+filter(test, duplicated(PIDN))

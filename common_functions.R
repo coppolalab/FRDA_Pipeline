@@ -35,8 +35,7 @@ gen.IACcluster <- function(filename, dataset, maintitle)
 
 #Create plot of standard deviations of all interarray correlations.  
 gen.sdplot <- function(filename, dataset, maintitle)
-{
-    meanIAC <- apply(dataset, 2, mean)
+{ meanIAC <- apply(dataset, 2, mean)
     sdCorr <- sd(meanIAC)
     numbersd <- (meanIAC - mean(meanIAC)) / sdCorr
     numbersd.plot <- data.frame("Sample.Status" = names(numbersd), "Sample.Num" = seq(1:length(numbersd)), "Z.score" = numbersd)
@@ -68,10 +67,9 @@ gen.peer <- function(num.factors, intensities, use.covariates, covariates)
     rownames(residuals.PEER) = rownames(intensities)
     colnames(residuals.PEER) = colnames(intensities)
 
-    write_csv(data.frame(residuals.PEER), path = paste("residuals_", num.factors, sep = "", ".csv"))
-    write_csv(data.frame(PEER_getX(model)), path = paste("factor_", num.factors, sep = "", ".csv"))
-    write_csv(data.frame(PEER_getW(model)), path = paste("weight_", num.factors, sep = "", ".csv"))
-    write_csv(data.frame(PEER_getAlpha(model)), path = paste("precision_", num.factors, sep = "", ".csv"))
+    write.csv(data.frame(PEER_getX(model)), file = paste("factor_", num.factors, sep = "", ".csv"), row.names = FALSE)
+    write.csv(data.frame(PEER_getW(model)), file = paste("weight_", num.factors, sep = "", ".csv"), row.names = FALSE)
+    write.csv(data.frame(PEER_getAlpha(model)), file = paste("precision_", num.factors, sep = "", ".csv"), row.names = FALSE)
 
     CairoPDF(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
     PEER_plotModel(model)
@@ -82,3 +80,15 @@ gen.peer <- function(num.factors, intensities, use.covariates, covariates)
     dev.off()
 }
 
+saveRDS.gz <- function(object,file,threads=parallel::detectCores()) {
+  con <- pipe(paste0("pigz -p",threads," > ",file),"wb")
+  saveRDS(object, file = con)
+  close(con)
+}
+
+readRDS.gz <- function(file,threads=parallel::detectCores()) {
+  con <- pipe(paste0("pigz -d -c -p",threads," ",file))
+  object <- readRDS(file = con)
+  close(con)
+  return(object)
+}

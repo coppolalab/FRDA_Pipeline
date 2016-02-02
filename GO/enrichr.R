@@ -25,7 +25,11 @@ get.enrichrdata <- function(database, gene.df, use.weights)
     }
 
     post.request <- POST(url = paste(mainurl, "addList", sep = "/"), body = list(list = gene.list.format, description = ""))
-    userlist <- content(post.request, "text") %>% str_extract("[0-9]+")
+
+    #This was changed because Enrichr updated their API so that POST requests to addList return both a shortID and the full length userListID.  The code has been adjusted so that it properly extracts the userListID only, since the uniqueness of the shortIDs is unclear.
+    userlist.raw <- content(post.request, "text") 
+    userlist <- str_split(userlist.raw, ",")[[1]][2] %>% str_extract("[0-9]+")
+    
     get.request <- GET(url = paste(mainurl, "enrich", sep = "/"), query = list(backgroundType = database, userListId = userlist))
     get.content <- content(get.request)[[1]]
 

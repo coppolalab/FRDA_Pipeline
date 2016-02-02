@@ -1,15 +1,3 @@
-#Functional programming
-library(magrittr)
-library(purrr)
-library(functional)
-
-#Data arrangement
-library(reshape2)
-library(plyr)
-library(dplyr)
-library(tidyr)
-library(doBy)
-
 #String operations
 library(stringr)
 
@@ -24,49 +12,47 @@ library(ggplot2)
 library(Biobase)
 library(matrixStats)
 library(abind)
+library(lumi)
+library(lumiHumanAll.db)
+library(annotate)
+library(sva)
+library(peer)
+library(limma)
 
+#Longitudinal analysis
 library(dtw)
-library(fastICA)
-library(minerva)
-library(minet)
-library(parallel)
-library(moments)
 
+#Plotting
 library(Cairo)
 library(WGCNA)
-library(Rgraphviz)
 library(heatmap.plus)
 library(flashClust)
 enableWGCNAThreads()
 
-load(file = "../STEM/save/intensities.peer.rda")
-load(file = "../STEM/save/targets.final.known.rda")
-load(file = "../WGCNA/save/annot.reduce.rda")
+#Functional programming
+library(magrittr)
+library(purrr)
+library(functional)
+library(vadr)
 
-gen.long <- function(dataset, targets, timepoints)
-{
-    PIDN.long <- filter(targets, Sample.Num == as.character(timepoints)) %>% select(PIDN) %>% as.matrix 
-    targets.long <- filter(targets, PIDN %in% PIDN.long) %>% filter(Sample.Num <= timepoints)
-    intensities.long <- select(dataset, one_of(targets.long$Sample.Name))
-    intensities.long %<>% t %>% data.frame
-    intensities.long <- data.frame(Sample.Num = targets.long$Sample.Num, PIDN = targets.long$PIDN, Status = targets.long$Status, intensities.long) 
-    intensities.melt <- melt(intensities.long, id.vars = c("Sample.Num", "PIDN", "Status"))
-    intensities.summed <- dcast(intensities.melt, PIDN + variable + Status ~ Sample.Num, value.var = "value")
-
-    return(intensities.summed)
-}
+#Data arrangement
+library(reshape2)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(doBy)
 
 gen.median <- function(dataset)
 {
-    intensities.median <- by(dataset, factor(dataset$variable), select, -PIDN, -variable) %>% lapply(Compose(as.matrix, colMedians)) %>% reduce(rbind) %>% data.frame
-    intensities.median$Probe_Id <- unique(dataset$variable)
+    intensities.median <- by(dataset, factor(dataset$variable), select, -PIDN, -variable, -Status) %>% lapply(Compose(as.matrix, colMedians)) %>% reduce(rbind) %>% data.frame
+    intensities.median$Symbol <- unique(dataset$variable)
     return(intensities.median)
 }
 
 gen.mean <- function(dataset)
 {
-    intensities.mean <- by(dataset, factor(dataset$variable), select, -PIDN, -variable) %>% lapply(Compose(as.matrix, colMeans)) %>% reduce(rbind) %>% data.frame
-    intensities.mean$Probe_Id <- unique(dataset$variable)
+    intensities.mean <- by(dataset, factor(dataset$variable), select, -PIDN, -variable, -Status) %>% lapply(Compose(as.matrix, colMeans)) %>% reduce(rbind) %>% data.frame
+    intensities.mean$Symbol <- unique(dataset$variable)
     return(intensities.mean)
 }
 
@@ -80,73 +66,9 @@ gen.dist <- function(dataset)
 
 gen.dtw <- function(dataset)
 {
-    combinations <- combn(dataset, 2, simplify = FALSE) %>% lapply(function(x) {lapply(x, select, -Probe_Id)} )
+    combinations <- combn(dataset, 2, simplify = FALSE) %>% lapply(function(x) lapply(x, select, -Symbol) )
     dists <- lapply(combinations, gen.dist)
     return(dists)
-}
-
-extract.ica <- function(index, dataset)
-{
-    icm.sig <- which(abs(dataset[index]) > 3)
-    dataset.sig <- dataset[icm.sig,] #%>% arrange_(index)
-    dataset.sig.sorted <- dataset.sig[order(abs(dataset.sig[,index]), decreasing = TRUE),]
-    return(as.numeric(rownames(dataset.sig.sorted)))
-}
-
-gen.ica <- function(dataset)
-{
-    factors <- names(dataset)
-    ica.factors <- lapply(factors, extract.ica, dataset)
-    return(ica.factors)
-}
-
-slice.ica <- function(index, dataset)
-{
-    return(slice(dataset, index))
-}
-
-subset.ica <- function(raw.data, ica.members)
-{
-   ica.genes <- lapply(ica.members, slice.ica, raw.data) 
-   ica.joined <- lapply(ica.genes, merge, annot.reduce)
-   ica.joined %<>% lapply(select, Probe_Id, Accession:Definition, contains("X"))
-   return(list(ica.joined))
-}
-
-enrichr.ica <- function(status.index, data.raw, enrichr.terms, prefix)
-{
-    data.subset <- data.raw[[status.index]]
-    full.path <- file.path("./enrichr", prefix, status.index)
-    dir.create(full.path, showWarnings = FALSE, recursive = TRUE)
-    names(data.subset) <- paste("X", 1:length(data.subset), sep = "")
-    lapply(names(data.subset), enrichr.submit, data.subset, full.path, enrichr.terms, FALSE)
-}
-
-enrichr.submit <- function(index, full.df, full.path, enrichr.terms, use.weights)
-{
-    dataset <- full.df[[index]]
-    new.fullpath <- file.path(full.path, index)
-    dir.create(new.fullpath, showWarnings = FALSE, recursive = TRUE)
-    enrichr.data <- lapply(enrichr.terms, get.enrichrdata, dataset, FALSE)
-    enrichr.names <- enrichr.terms[!is.na(enrichr.data)]
-    enrichr.data <- enrichr.data[!is.na(enrichr.data)]
-    names(enrichr.data) <- enrichr.names
-    parLapply(cluster.parallel, names(enrichr.data), enrichr.wkbk, enrichr.data, new.fullpath)
-}
-
-enrichr.wkbk <- function(subindex, full.df, new.fullpath)
-{
-    dataset <- full.df[[subindex]]
-    wb <- createWorkbook()
-    addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
-    writeDataTable(wb = wb, sheet = 1, x = dataset, withFilter = TRUE)
-    freezePane(wb, 1, firstRow = TRUE)
-    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
-    setColWidths(wb, 1, cols = c(1, 3:ncol(dataset)), widths = "auto")
-    setColWidths(wb, 1, cols = 2, widths = 45)
-
-    filename = paste(file.path(new.fullpath, subindex), ".xlsx", sep = "")
-    saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
 saveRDS.gz <- function(object,file,threads=parallel::detectCores()) {
@@ -162,11 +84,24 @@ readRDS.gz <- function(file,threads=parallel::detectCores()) {
   return(object)
 }
 
+gen.boxplot <- function(filename, lumi.object, colorscheme, maintext, ylabtext)
+{
+    expr.df <- exprs(lumi.object) %>% t %>% data.frame
+    dataset.addvars <- mutate(expr.df, Sample.Status = sampleNames(lumi.object), Batch = lumi.object$Batch)
+    dataset.m <- melt(dataset.addvars, id = c("Sample.Status", "Batch"))
+    p <- ggplot(dataset.m, aes(x = Sample.Status, y = value, fill = factor(Batch))) + geom_boxplot() + theme_bw()
+    p <- p + scale_fill_manual(values = colorscheme)
+    p <- p + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1.0, size = 5))     
+    p <- p + ggtitle(maintext) + ylab(ylabtext) + xlab("Sample") + theme(axis.text.x = element_text(size = 3))
+    p <- p + theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    ggsave(filename = filename, plot = p, family = "Oxygen", width = 20 , height = 8)
+}
+
 gen.small.workbook <- function(dataset, filename)
 {
     #coef.cols <- colnames(dataset) %>% str_detect("Coef.") %>% which
     #colnames(dataset)[coef.cols] %<>% str_replace("Coef.", "")
-    dataset$Definition %<>% str_replace_all("Homo sapiens ", "") %>% str_replace_all("PREDICTED: ", "")
+    #dataset$DEFINITION %<>% str_replace_all("Homo sapiens ", "") %>% str_replace_all("PREDICTED: ", "")
 
     wb <- createWorkbook()
     addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
@@ -184,350 +119,317 @@ gen.small.workbook <- function(dataset, filename)
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-gen.icaplots <- function(index, dataset)
+enrichr.wkbk <- function(subindex, full.df, new.fullpath)
 {
-    data.subset <- dataset[[index]]
-    names(data.subset) <- paste("ICM", 1:length(data.subset))
-    dataset.normalized <- lapply(data.subset, normalize.data)
-
-    dataset.melt <- melt(dataset.normalized, id.vars = "Probe_Id")
-    dataset.melt$variable %<>% str_replace("X", "")
-    p <- ggplot(dataset.melt, aes(x = variable, y = value, group = Probe_Id, color = Probe_Id)) + geom_line(size = 1.5) 
-    p <- p + theme_bw() + theme(legend.position = "none") + ylab("Normalized log2 Expression") + xlab("Time") + facet_wrap(~ L1, scale = "free_y")
-    CairoPDF(index, width = 12, height = 8)
-    print(p)
-    dev.off()
-}
-
-normalize.data <- function(dataset)
-{
-    rownames(dataset) <- dataset$Probe_Id
-    dataset %<>% select(-Probe_Id)
-    dataset.normalized <- sweep(dataset, 1, dataset$X1)
-    dataset.normalized$Probe_Id <- rownames(dataset.normalized) 
-    return(dataset.normalized[1:10,])
-}
-
-ica.wkbk <- function(index, dataset, new.fullpath)
-{
-    data.subset <- dataset[[index]]
+    dataset <- full.df[[subindex]]
     wb <- createWorkbook()
     addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
-    writeDataTable(wb = wb, sheet = 1, x = data.subset, withFilter = TRUE)
+    writeDataTable(wb = wb, sheet = 1, x = dataset, withFilter = TRUE)
     freezePane(wb, 1, firstRow = TRUE)
     modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
-    setColWidths(wb, 1, cols = c(1:3, 5:ncol(data.subset)), widths = "auto")
-    setColWidths(wb, 1, cols = 4, widths = 45)
+    setColWidths(wb, 1, cols = c(1, 3:ncol(dataset)), widths = "auto")
+    setColWidths(wb, 1, cols = 2, widths = 45)
 
-    filename = paste(file.path(new.fullpath, index), ".xlsx", sep = "")
+    dir.create(new.fullpath, showWarnings = FALSE, recursive = TRUE)
+    filename = paste(file.path(new.fullpath, subindex), ".xlsx", sep = "")
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-gen.icatables <- function(index, dataset, prefix)
-{
-    data.subset <- dataset[[index]]
-    full.path <- file.path("./modules", prefix, index)
-    dir.create(full.path, showWarnings = FALSE, recursive = TRUE)
-    names(data.subset) <- paste("ICM", 1:length(data.subset), sep = "")
-    print(str(data.subset))
-    l_ply(names(data.subset), ica.wkbk, data.subset, full.path)
-}
+lumi.known <- readRDS.gz("../baseline_lumi/save/lumi.known.rda")
+lumi.vst <- lumiT(lumi.known)
 
-intensities.3 <- gen.long(data.frame(intensities.PEER), targets.final.known, 3)
-intensities.4 <- gen.long(data.frame(intensities.PEER), targets.final.known, 4)
-intensities.8 <- gen.long(data.frame(intensities.PEER), targets.final.known, 8)
+long.key <- grepl("^1$|1r|2|3|4", lumi.vst$Sample.Num)
+lumi.long <- lumi.vst[,long.key]
+saveRDS.gz(lumi.long, file = "./save/lumi.long.rda")
 
-intensities.3.median <- by(intensities.3, as.factor(intensities.3$Status), select, -Status) %>% lapply(gen.median)
-intensities.4.median <- by(intensities.4, as.factor(intensities.4$Status), select, -Status) %>% lapply(gen.median)
-intensities.3.mean <- by(intensities.3, as.factor(intensities.3$Status), select, -Status) %>% lapply(gen.mean)
-intensities.4.mean <- by(intensities.4, as.factor(intensities.4$Status), select, -Status) %>% lapply(gen.mean)
-intensities.8.median <- gen.median(select(intensities.8, -Status))
+lumi.norm <- lumiN(lumi.long, method = "rsn")
+lumi.qual <- lumiQ(lumi.norm, detectionTh = 0.01)
 
-intensities.3.ica <- lapply(intensities.3.median, select, -Probe_Id) %>% lapply(fastICA, 3) %>% lapply(`[[`, "S") %>% lapply(data.frame) %>% lapply(gen.ica)
-intensities.4.ica <- lapply(intensities.4.median, select, -Probe_Id) %>% lapply(fastICA, 4) %>% lapply(`[[`, "S") %>% lapply(data.frame) %>% lapply(gen.ica)
-intensities.3.ica.m <- lapply(intensities.3.mean, select, -Probe_Id) %>% lapply(fastICA, 3) %>% lapply(`[[`, "S") %>% lapply(data.frame) %>% lapply(gen.ica)
-intensities.4.ica.m <- lapply(intensities.4.mean, select, -Probe_Id) %>% lapply(fastICA, 4) %>% lapply(`[[`, "S") %>% lapply(data.frame) %>% lapply(gen.ica)
-intensities.8.ica <- fastICA(select(intensities.8.median, -Probe_Id), 8)[["S"]] %>% data.frame %>% gen.ica
+lumi.cutoff <- detectionCall(lumi.qual)
+lumi.expr <- lumi.qual[which(lumi.cutoff > 0),]
+symbols.lumi <- getSYMBOL(rownames(lumi.expr), 'lumiHumanAll.db') %>% is.na
+lumi.expr.annot <- lumi.expr[!symbols.lumi,] #Drop any probe which is not annotated
+saveRDS.gz(lumi.expr.annot, file = "./save/lumi.expr.annot.rda")
 
-intensities.3.ica.genes <- mapply(intensities.3.median, intensities.3.ica, FUN = subset.ica)
-intensities.4.ica.genes <- mapply(intensities.4.median, intensities.4.ica, FUN = subset.ica)
-intensities.3.ica.genes.m <- mapply(intensities.3.mean, intensities.3.ica, FUN = subset.ica)
-intensities.4.ica.genes.m <- mapply(intensities.4.mean, intensities.4.ica, FUN = subset.ica)
-intensities.8.ica.genes <- subset.ica(intensities.8.median, intensities.8.ica)[[1]]
+qcsum <- lumi.expr.annot@QC$sampleSummary %>% t %>% data.frame
+colnames(qcsum) %<>% str_replace("\\.0\\.01\\.", "")
+qcsum$Sample.Name <- rownames(qcsum)
+qcsum$RIN <- lumi.expr.annot$RIN
+qcsum$Sample.Num <- lumi.expr.annot$Sample.Num
+qcsum %<>% arrange(distance.to.sample.mean)
 
-names(intensities.3.ica.genes) <- names(intensities.3.ica)
-names(intensities.4.ica.genes) <- names(intensities.4.ica)
-names(intensities.3.ica.genes.m) <- names(intensities.3.ica.m)
-names(intensities.4.ica.genes.m) <- names(intensities.4.ica.m)
+qcsum.remove <- filter(qcsum, distance.to.sample.mean > 70)$Sample.Name %>% paste(collapse = "|")
+remove.indices <- grepl(qcsum.remove, sampleNames(lumi.expr.annot))
+lumi.rmout <- lumi.long[,!remove.indices]
+lumi.rmout.norm <- lumiN(lumi.rmout, method = "rsn") #Normalize with robust spline regression
+lumi.rmout.qual <- lumiQ(lumi.rmout.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
+lumi.rmout.cutoff <- detectionCall(lumi.rmout.qual) #Get the count of probes which passed the detection threshold per sample
+lumi.rmout.expr <- lumi.rmout.qual[which(lumi.rmout.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
+symbols.lumi.rmout <- getSYMBOL(rownames(lumi.rmout.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
+lumi.rmout.annot <- lumi.rmout.expr[!symbols.lumi.rmout,] #Drop any probe which is not annotated
+saveRDS.gz(lumi.rmout.annot, file = "./save/lumi.rmout.annot.rda")
 
-l_ply(names(intensities.4.ica.genes), gen.icaplots, intensities.4.ica.genes)
+qcsum.rmout <- lumi.rmout.annot@QC$sampleSummary %>% t %>% data.frame
+colnames(qcsum.rmout) %<>% str_replace("\\.0\\.01\\.", "")
+qcsum.rmout$Sample.Name <- rownames(qcsum.rmout)
+qcsum.rmout$RIN <- lumi.rmout.annot$RIN
+qcsum.rmout$Sample.Num <- lumi.rmout.annot$Sample.Num
+qcsum.rmout$PIDN <- lumi.rmout.annot$PIDN
+arrange(qcsum.rmout, distance.to.sample.mean)
 
-l_ply(names(intensities.3.ica.genes), gen.icatables, intensities.3.ica.genes, "ica.3.median")
-l_ply(names(intensities.4.ica.genes), gen.icatables, intensities.4.ica.genes, "ica.4.median")
-l_ply(names(intensities.3.ica.genes.m), gen.icatables, intensities.3.ica.genes.m, "ica.3.mean")
-l_ply(names(intensities.4.ica.genes.m), gen.icatables, intensities.4.ica.genes.m, "ica.4.mean")
+PIDNs <- filter(qcsum.rmout, Sample.Num == "1r")$PIDN 
+orig <- filter(qcsum.rmout, PIDN %in% PIDNs & Sample.Num == "1")$distance.to.sample.mean
+orig.names <- filter(qcsum.rmout, PIDN %in% PIDNs & Sample.Num == "1")$Sample.Name
+reps <- filter(qcsum.rmout, PIDN %in% PIDNs & Sample.Num == "1r")$distance.to.sample.mean
+reps.names <- filter(qcsum.rmout, PIDN %in% PIDNs & Sample.Num == "1r")$Sample.Name
+reps.final <- data.frame(orig, reps)
+max.key <- apply(reps.final, 1, which.max)
+reps.names <- data.frame(orig.names, reps.names)
 
-source("../GO/enrichr.R")
+remove.names <- reps.names[cbind(seq_along(max.key), max.key)]
+remove.key <- paste(remove.names, collapse = "|")
+reps.samples <- grepl(remove.key, sampleNames(lumi.long))
+remove.all <- remove.indices | reps.samples
+saveRDS.gz(remove.all, "./save/remove.all.rda")
+
+lumi.rmreps <- lumi.long[,!remove.all]
+lumi.rmreps.norm <- lumiN(lumi.rmreps, method = "rsn") #Normalize with robust spline regression
+#lumi.rmreps.qual <- lumiQ(lumi.rmreps.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
+lumi.rmreps.cutoff <- detectionCall(lumi.rmreps.norm) #Get the count of probes which passed the detection threshold per sample
+lumi.rmreps.expr <- lumi.rmreps.norm[which(lumi.rmreps.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
+symbols.lumi.rmreps <- getSYMBOL(rownames(lumi.rmreps.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
+lumi.rmreps.annot <- lumi.rmreps.expr[!symbols.lumi.rmreps,] #Drop any probe which is not annotated
+saveRDS.gz(lumi.rmreps.annot, file = "./save/lumi.rmreps.annot.rda")
+
+model.status <- model.matrix( ~ 0 + factor(lumi.rmreps.annot$Status) )
+colnames(model.status) <- c("Carrier", "Control", "Patient")
+model.status.reduce <- model.status[,-2]
+
+model.sex <- model.matrix( ~ 0 + factor(lumi.rmreps.annot$Sex) )
+colnames(model.sex) <- c("Female", "Male")
+model.sex.reduce <- model.sex[,-1]
+
+model.combat <- cbind(model.status.reduce, Male = model.sex.reduce, Age = as.numeric(lumi.rmreps.annot$Draw.Age), RIN = lumi.rmreps.annot$RIN)
+
+expr.combat <- ComBat(dat = exprs(lumi.rmreps.annot), batch = factor(lumi.rmreps.annot$Batch), mod = model.combat)
+lumi.combat <- lumi.rmreps.annot
+exprs(lumi.combat) <- expr.combat
+
+source("../common_functions.R")
+
+gen.peer(8, exprs(lumi.combat), TRUE, model.combat)
+model.PEER_covariate <- read_csv("./factor_8.csv") %>% select(-(X1:X6))
+rownames(model.PEER_covariate) <- colnames(lumi.combat)
+colnames(model.PEER_covariate) <- paste("X", 1:ncol(model.PEER_covariate), sep = "")
+
+targets1.gaa <- select(pData(lumi.combat), Sample.Name, GAA1) %>% filter(!is.na(GAA1))
+cor.gaa <- gen.cor(model.PEER_covariate, targets1.gaa)
+
+targets1.onset <- select(pData(lumi.combat), Sample.Name, Onset) %>% filter(!is.na(Onset)) 
+cor.onset <- gen.cor(model.PEER_covariate, targets1.onset)
+
+PEER.traits.all <- cbind(cor.gaa, cor.onset) %>% data.frame
+PEER.traits.pval <- select(PEER.traits.all, contains("p.value")) %>% as.matrix
+PEER.traits.cor <- select(PEER.traits.all, -contains("p.value")) %>% as.matrix
+
+text.matrix.PEER <- paste(signif(PEER.traits.cor, 2), '\n(', signif(PEER.traits.pval, 1), ')', sep = '')
+dim(text.matrix.PEER) <- dim(PEER.traits.cor)
+gen.text.heatmap(PEER.traits.cor, text.matrix.PEER, colnames(PEER.traits.cor), rownames(PEER.traits.cor), "", "PEER factor-trait relationships")
+
+PEER.trait.out <- data.frame(Factor = rownames(PEER.traits.cor), PEER.traits.cor, PEER.traits.pval)
+write_csv(PEER.trait.out, "PEER_trait_cor.csv")
+
+PEER.weights.sums <- colSums(abs(model.PEER_covariate)) %>% data.frame
+PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums)
+colnames(PEER.weights.sums)[1] <- "Weight"
+
+p <- ggplot(PEER.weights.sums, aes(x = factor(Factor), y = as.numeric(Weight), group = 1)) + geom_line(color = "blue") 
+p <- p + theme_bw() + xlab("Factor") + ylab("Weight")
+CairoPDF("./PEER_weights", height = 4, width = 6)
+print(p)
+dev.off()
+
+#Removing effects of covariates + PEER factors  !!DO NOT USE FOR LINEAR MODELING WITH CONTRASTS!!
+model.cov <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.combat$Draw.Age), RIN = lumi.combat$RIN)
+model.full.cov <- cbind(model.cov, model.PEER_covariate)
+export.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.full.cov, design = model.status)
+export.lumi <- lumi.combat
+exprs(export.lumi) <- export.expr
+saveRDS.gz(export.lumi, file = "./save/export.lumi.rda")
+
+batch.colors <- c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green", "blue4", "red4")
+gen.boxplot("baseline_intensity_corrected.jpg", export.lumi, batch.colors, "Covariate-corrected intensity", "Intensity")
+
+PIDN.long <- filter(pData(export.lumi), Sample.Num == "4")$PIDN 
+export.lumi$Sample.Num[export.lumi$Sample.Num == "1r"] <- 1
+export.lumi$Sample.Num %<>% as.character %>% as.numeric
+
+targets.long <- filter(pData(export.lumi), PIDN %in% PIDN.long) 
+targets.nums <- by(targets.long, targets.long$PIDN, nrow) %>% as.list %>% melt %>% data.frame 
+missing.PIDNs <- filter(targets.nums, value < 4)$L1 
+targets.final <- filter(targets.long, !grepl(paste("^", missing.PIDNs, "$", sep = ""), PIDN))
+long.index <- sampleNames(export.lumi) %in% targets.final$Sample.Name 
+
+lumi.final <- export.lumi[,long.index]
+fdata.first <- fData(lumi.final)
+fdata.first$nuID <- rownames(fdata.first)
+
+lumi.final <- lumi.final[!is.na(fdata.first$SYMBOL),]
+fdata <- fData(lumi.final)
+lumi.exprs <- exprs(lumi.final)
+lumi.collapse <- collapseRows(lumi.exprs, factor(fdata$SYMBOL), rownames(lumi.exprs), method = "function", methodFunction = colMeans)
+lumi.exprs.collapse <- lumi.collapse$datETcollapsed %>% t
+
+saveRDS.gz(lumi.final, "./save/lumi.final.rda")
+saveRDS.gz(lumi.exprs.collapse, "./save/lumi.exprs.collapse.rda")
+saveRDS.gz(fdata, "./save/fdata.rda")
+
+intensities.long <- data.frame(Sample.Num = lumi.final$Sample.Num, PIDN = lumi.final$PIDN, Status = lumi.final$Status, lumi.exprs.collapse) 
+intensities.melt <- melt(intensities.long, id.vars = c("Sample.Num", "PIDN", "Status"))
+intensities.summed <- dcast(intensities.melt, PIDN + variable + Status ~ Sample.Num, value.var = "value")
+saveRDS.gz(intensities.summed, "./save/intensities.summed.rda")
+
+source("../../code/GO/enrichr.R")
+
+intensities.medians <- by(intensities.summed, factor(intensities.summed$Status), gen.median)
+saveRDS.gz(intensities.medians, "./save/intensities.medians.rda")
+intensities.dists <- gen.dtw(intensities.medians) %>% reduce(cbind) %>% data.frame
+coltitles <- c("Carrier.vs.Control", "Patient.vs.Carrier", "Patient.vs.Control")
+rownames(intensities.dists) <- colnames(lumi.exprs.collapse)
+colnames(intensities.dists) <- coltitles
+intensities.dists$Symbol <- rownames(intensities.dists)
+
+dtw.cc <- arrange(intensities.dists, desc(Carrier.vs.Control))
+dtw.pca <- select(intensities.dists, Symbol, Patient.vs.Carrier, Patient.vs.Control, Carrier.vs.Control) %>% arrange(desc(Patient.vs.Carrier))
+dtw.pco <- select(intensities.dists, Symbol, Patient.vs.Control, Patient.vs.Carrier, Carrier.vs.Control) %>% arrange(desc(Patient.vs.Control))
+gen.small.workbook(dtw.cc, "carrier.control.median.xlsx")
+gen.small.workbook(dtw.pca, "patient.carrier.median.xlsx")
+gen.small.workbook(dtw.pco, "patient.control.median.xlsx")
+
+dtw.cc.submit <- dtw.cc[1:500,]
+dtw.pca.submit <- dtw.pca[1:500,]
+dtw.pco.submit <- dtw.pco[1:500,]
+
+get.stringdb(dtw.cc.submit, "cc.median", "cc")
+get.stringdb(dtw.pca.submit, "pca.median", "pca")
+get.stringdb(dtw.pco.submit, "pco.median", "pco")
+
 enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
-cluster.parallel <- makeForkCluster()
+dtw.cc.enrichr <- map(enrichr.terms, get.enrichrdata, dtw.cc.submit, FALSE)
+names(dtw.cc.enrichr) <- enrichr.terms
+map(names(dtw.cc.enrichr), enrichr.wkbk, dtw.cc.enrichr, "./enrichr/cc.median")
 
-lapply(names(intensities.3.ica.genes), enrichr.ica, intensities.3.ica.genes, enrichr.terms, "intensities.3.median")
-lapply(names(intensities.4.ica.genes), enrichr.ica, intensities.4.ica.genes, enrichr.terms, "intensities.4.median")
-lapply(names(intensities.3.ica.genes.m), enrichr.ica, intensities.3.ica.genes.m, enrichr.terms, "intensities.3.mean")
-lapply(names(intensities.4.ica.genes.m), enrichr.ica, intensities.4.ica.genes.m, enrichr.terms, "intensities.4.mean")
+dtw.pca.enrichr <- map(enrichr.terms, get.enrichrdata, dtw.pca.submit, FALSE)
+names(dtw.pca.enrichr) <- enrichr.terms
+map(names(dtw.pca.enrichr), enrichr.wkbk, dtw.pca.enrichr, "./enrichr/pca.median")
 
-intensities.4.dists <- gen.dtw(intensities.4.mean) %>% reduce(cbind) %>% data.frame
-rownames(intensities.4.dists) <- rownames(intensities.PEER)
-colnames(intensities.4.dists) <- coltitles
-intensities.4.dists$Probe_Id <- rownames(intensities.4.dists)
-dtw.4.joined <- join(intensities.4.dists, annot.reduce)
-dtw.4.joined %<>% select(Probe_Id:Definition, Carrier.Control:Control.Patient)
-dtw.cc.4 <- arrange(dtw.4.joined, desc(Carrier.Control))
-dtw.pca.4 <- select(dtw.4.joined, Probe_Id:Definition, Carrier.Patient, Control.Patient, Carrier.Control) %>% arrange(desc(Carrier.Patient))
-dtw.pco.4 <- select(dtw.4.joined, Probe_Id:Definition, Control.Patient, Carrier.Patient, Carrier.Control) %>% arrange(desc(Control.Patient))
-gen.small.workbook(dtw.cc.4, "carrier.control.4timepoints.median.xlsx")
-gen.small.workbook(dtw.pca.4, "patient.carrier.4timepoints.median.xlsx")
-gen.small.workbook(dtw.pco.4, "patient.control.4timepoints.median.xlsx")
+dtw.pco.enrichr <- map(enrichr.terms, get.enrichrdata, dtw.pco.submit, FALSE)
+names(dtw.pco.enrichr) <- enrichr.terms
+map(names(dtw.pco.enrichr), enrichr.wkbk, dtw.pco.enrichr, "./enrichr/pco.median")
 
-intensities.4.patient <- intensities.4.median$Patient
-ica.patient <- intensities.4.ica.genes$Patient %>% llply(select, Probe_Id) %>% reduce(c) %>% llply(as.character) %>% reduce(c) %>% unique
-dtw.patient <- unique(c(dtw.pca.4[1:2000,]$Probe_Id, dtw.pco.4[1:2000,]$Probe_Id))
-all.patient <- unique(c(ica.patient, dtw.patient))
+intensities.means <- by(intensities.summed, factor(intensities.summed$Status), gen.mean)
+saveRDS.gz(intensities.means, "./save/intensities.means.rda")
+intensities.dists.m <- gen.dtw(intensities.means) %>% reduce(cbind) %>% data.frame
+rownames(intensities.dists.m) <- colnames(lumi.exprs.collapse)
+colnames(intensities.dists.m) <- coltitles
+intensities.dists.m$Symbol <- rownames(intensities.dists.m)
 
-intensities.4.carrier <- intensities.4.median$Carrier
-ica.carrier <- intensities.4.ica.genes$Carrier %>% llply(select, Probe_Id) %>% reduce(c) %>% llply(as.character) %>% reduce(c) %>% unique
-dtw.carrier <- unique(c(dtw.pca.4[1:2000,]$Probe_Id, dtw.cc.4[1:2000,]$Probe_Id))
-all.carrier <- unique(c(ica.carrier, dtw.carrier))
+dtw.cc.m <- arrange(intensities.dists.m, desc(Carrier.vs.Control))
+dtw.pca.m <- select(intensities.dists.m, Symbol, Patient.vs.Carrier, Patient.vs.Control, Carrier.vs.Control) %>% arrange(desc(Patient.vs.Carrier))
+dtw.pco.m <- select(intensities.dists.m, Symbol, Patient.vs.Control, Patient.vs.Carrier, Carrier.vs.Control) %>% arrange(desc(Patient.vs.Control))
 
-intensities.4.control <- intensities.4.median$Control
-ica.control <- intensities.4.ica.genes$Control %>% llply(select, Probe_Id) %>% reduce(c) %>% llply(as.character) %>% reduce(c) %>% unique
-dtw.control <- unique(c(dtw.cc.4[1:2000,]$Probe_Id, dtw.pco.4[1:2000,]$Probe_Id))
-all.control <- unique(c(ica.control, dtw.control))
+saveRDS.gz(dtw.cc.m, "./save/dtw.cc.rda")
+saveRDS.gz(dtw.pca.m, "./save/dtw.pca.rda")
+saveRDS.gz(dtw.pco.m, "./save/dtw.pco.rda")
+gen.small.workbook(dtw.cc.m, "carrier.control.mean.xlsx")
+gen.small.workbook(dtw.pca.m, "patient.carrier.mean.xlsx")
+gen.small.workbook(dtw.pco.m, "patient.control.mean.xlsx")
 
-genes.list <- list(all.patient, all.carrier, all.control)
-names(genes.list) <- c("Patient", "Carrier", "Control")
-mi.networks <- lapply(names(genes.list), gen.mi, intensities.4.median, genes.list)
-names(mi.networks) <- names(genes.list)
-saveRDS.gz(mi.networks, file = "./save/mi.networks.rda")
+dtw.cc.m.submit <- dtw.cc.m[1:500,]
+dtw.pca.m.submit <- dtw.pca.m[1:500,]
+dtw.pco.m.submit <- dtw.pco.m[1:500,]
 
-gen.mi <- function(status, expr, genes)
-{
-    expr.subset <- expr[[status]]
-    genes.subset <- genes[[status]]
-    mi.expr <- slice(expr.subset, match(genes.subset, Probe_Id)) 
-    rownames(mi.expr) <- mi.expr$Probe_Id
-    mi.expr %<>% select(-Probe_Id) %>% t
-
-    mi.mrnet <- minet(mi.expr, method = "mrnet", estimator = "mi.shrink", disc = "equalfreq")
-    return(mi.mrnet)
-}
-
-gen.mi.tables <- function(status, mi.networks)
-{
-    mi.connectivity <- colSums(mi.networks[[status]]) %>% sort
-    mi.genes <- data.frame(Probe_Id = names(mi.connectivity), Connectivity = mi.connectivity)
-    mi.genes %<>% merge(annot.reduce) %>% arrange(desc(Connectivity))
-    filename <- paste("mi.", status, ".network.xlsx", sep = "")
-    write.xlsx(mi.genes, filename)
-}
-lapply(names(mi.networks), gen.mi.tables, mi.networks)
-
-normalize.expr <- function(dataset)
-{
-    PIDNS <- dataset$PIDN
-    dataset %<>% select(-Probe_Id, -PIDN, -Status)
-    dataset.normalized <- sweep(dataset, 1, dataset$`1`)
-    dataset.normalized$PIDN <- PIDNS
-    return(dataset.normalized)
-}
-colnames(intensities.4)[2] <- "Probe_Id"
-
-slc22a7 <- filter(intensities.4, Probe_Id == "ILMN_1653200" & Status == "Patient") %>% normalize.expr %>% melt(id.vars = "PIDN")
-p <- ggplot(slc22a7, aes(x = factor(variable), y = value, col = factor(PIDN), group = factor(PIDN))) + geom_line() + facet_wrap(~ PIDN)
-p <- p + theme(axis.title.x = element_blank(), legend.position = "none") + ylab("Log2 Normalized Expression")
-#p <- p + stat_summary(aes(group = NULL), fun.y = median, color = "red", geom = "point", size = 2)
-CairoPDF("slc22a7", width = 21, height = 14)
-print(p)
-dev.off()
-
-ISCA1L <- filter(intensities.4, Probe_Id == "ILMN_1672024" & Status == "Patient") %>% normalize.expr %>% melt(id.vars = "PIDN")
-p <- ggplot(ISCA1L, aes(x = factor(variable), y = value, col = factor(PIDN), group = factor(PIDN))) + geom_line() + facet_wrap(~ PIDN)
-#p <- p + stat_summary(aes(group = NULL), fun.y = median, color = "red", geom = "point", size = 2)
-p <- p + theme(axis.title.x = element_blank(), legend.position = "none") + ylab("Log2 Normalized Expression")
-CairoPDF("isca1l", width = 21, height = 14)
-print(p)
-dev.off()
-
-atp5ep2 <- filter(intensities.4, Probe_Id == "ILMN_1756674" & Status == "Patient") %>% normalize.expr %>% melt(id.vars = "PIDN")
-p <- ggplot(atp5ep2, aes(x = factor(variable), y = value, col = factor(PIDN), group = factor(PIDN))) + geom_line() + facet_wrap(~ PIDN, scale = "free_y")
-#p <- p + stat_summary(aes(group = NULL), fun.y = median, color = "red", geom = "point", size = 2)
-p <- p + theme(axis.title.x = element_blank(), legend.position = "none") + ylab("Log2 Normalized Expression")
-CairoPDF("atp5ep2", width = 21, height = 14)
-print(p)
-dev.off()
-
-timm22 <- filter(intensities.4, Probe_Id == "ILMN_1765332" & Status == "Patient") %>% normalize.expr %>% melt(id.vars = "PIDN")
-p <- ggplot(timm22, aes(x = factor(variable), y = as.numeric(value), col = factor(PIDN), group = factor(PIDN))) + geom_line() + facet_wrap(~ PIDN)
-#p <- p + stat_summary(aes(group = NULL), fun.y = median, color = "red", geom = "point", size = 2)
-p <- p + theme(axis.title.x = element_blank(), legend.position = "none") + ylab("Log2 Normalized Expression")
-CairoPDF("timm22", width = 21, height = 14)
-print(p)
-dev.off()
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()
-intensities.3.dists <- gen.dtw(intensities.3.mean) %>% reduce(cbind) %>% data.frame
-rownames(intensities.3.dists) <- rownames(intensities.PEER)
-colnames(intensities.3.dists) <- coltitles
-intensities.3.dists$Probe_Id <- rownames(intensities.3.dists)
-dtw.3.joined <- join(intensities.3.dists, annot.reduce)
-dtw.3.joined %<>% select(Probe_Id:Definition, Carrier.Control:Control.Patient)
-dtw.cc.3 <- arrange(dtw.3.joined, desc(Carrier.Control))
-dtw.pca.3 <- select(dtw.3.joined, Probe_Id:Definition, Carrier.Patient, Control.Patient, Carrier.Control) %>% arrange(desc(Carrier.Patient))
-dtw.pco.3 <- select(dtw.3.joined, Probe_Id:Definition, Control.Patient, Carrier.Patient, Carrier.Control) %>% arrange(desc(Control.Patient))
-gen.small.workbook(dtw.cc.3, "carrier.control.3timepoints.median.xlsx")
-gen.small.workbook(dtw.pca.3, "patient.carrier.3timepoints.median.xlsx")
-gen.small.workbook(dtw.pco.3, "patient.control.3timepoints.median.xlsx")
+unlist(test) %>% sort
 
-intensities.3.dists.m <- gen.dtw(intensities.3.mean) %>% reduce(cbind) %>% data.frame
-rownames(intensities.3.dists.m) <- rownames(intensities.PEER)
-colnames(intensities.3.dists.m) <- coltitles
-intensities.3.dists.m$Probe_Id <- rownames(intensities.3.dists.m)
-dtw.3.joined.m <- join(intensities.3.dists.m, annot.reduce)
-dtw.3.joined.m %<>% select(Probe_Id:Definition, Carrier.Control:Control.Patient)
-dtw.cc.3.m <- arrange(dtw.3.joined.m, desc(Carrier.Control))
-dtw.pca.3.m <- select(dtw.3.joined.m, Probe_Id:Definition, Carrier.Patient, Control.Patient, Carrier.Control) %>% arrange(desc(Carrier.Patient))
-dtw.pco.3.m <- select(dtw.3.joined.m, Probe_Id:Definition, Control.Patient, Carrier.Patient, Carrier.Control) %>% arrange(desc(Control.Patient))
-gen.small.workbook(dtw.cc.3.m, "carrier.control.3timepoints.mean.xlsx")
-gen.small.workbook(dtw.pca.3.m, "patient.carrier.3timepoints.mean.xlsx")
-gen.small.workbook(dtw.pco.3.m, "patient.control.3timepoints.mean.xlsx")
+symbols.only <- intensities.means$Patient$Symbol
 
-intensities.4.dists.m <- gen.dtw(intensities.4.mean) %>% reduce(cbind) %>% data.frame
-rownames(intensities.4.dists.m) <- rownames(intensities.PEER)
-colnames(intensities.4.dists.m) <- coltitles
-intensities.4.dists.m$Probe_Id <- rownames(intensities.4.dists.m)
-dtw.4.joined.m <- join(intensities.4.dists.m, annot.reduce)
-dtw.4.joined.m %<>% select(Probe_Id:Definition, Carrier.Control:Control.Patient)
-dtw.cc.4.m <- arrange(dtw.4.joined.m, desc(Carrier.Control))
-dtw.pca.4.m <- select(dtw.4.joined.m, Probe_Id:Definition, Carrier.Patient, Control.Patient, Carrier.Control) %>% arrange(desc(Carrier.Patient))
-dtw.pco.4.m <- select(dtw.4.joined.m, Probe_Id:Definition, Control.Patient, Carrier.Patient, Carrier.Control) %>% arrange(desc(Control.Patient))
-gen.small.workbook(dtw.cc.4.m, "carrier.control.4timepoints.mean.xlsx")
-gen.small.workbook(dtw.pca.4.m, "patient.carrier.4timepoints.mean.xlsx")
-gen.small.workbook(dtw.pco.4.m, "patient.control.4timepoints.mean.xlsx")
+#gen.permuts <- function(symbols.vector, symbols.list = list(), count.value = 1)
+#{
+   #if (count.value < 1000)
+   #{
+        #symbols.list[[count.value]] <- sample(symbols.vector)
+        #count.value = count.value + 1
+        #gen.permuts(symbols.vector, symbols.list, count.value)
+   #}
+   #else
+   #{
+        #symbols.list[[count.value]] <- sample(symbols.vector)
+        #return(symbols.list)
+   #}
+#}
 
-#mi.network.4 <- build.mim(mi.expr.4, estimator = "mi.shrink", disc = "equalfreq")
-#mi.dist.4 <- 1 - mi.network.4
-#mi.scale.4 <- log2(exp(1)) * (max(mi.dist.4) - min(mi.dist.4)) * mi.dist.4
-#mi.mrnet.4 <- mrnet(mi.scale.4)
+#permut.dtw <- function(symbols.new, intensities.first, intensities.second)
+#{
+    #intensities.first$Symbol <- symbols.new
+    #intensities.second$Symbol <- symbols.new
+    #intensities.first %<>% arrange(Symbol) %>% select(-Symbol)
+    #intensities.second %<>% arrange(Symbol) %>% select(-Symbol)
+    #dtw.permut <- map2(split(intensities.first, 1:nrow(intensities.first)), split(intensities.second, 1:nrow(intensities.second)), dtw) %>% map_dbl(`[[`, "normalizedDistance")
+    #return(dtw.permut)
+#}
 
-#saveRDS.gz(mi.mrnet.4, file = "./save/mi.mrnet.4.rda")
-#mi.network.aracne.4 <- minet(ica.expr.4, method = "aracne", estimator = "mi.shrink", disc = "equalfreq")
-#mi.network.clr.4 <- minet(ica.expr.4, method = "clr", estimator = "mi.shrink", disc = "equalfreq")
-#saveRDS.gz(mi.network.mrnet.4, file = "./save/mi.network.mrnet.4")
-#saveRDS.gz(mi.network.aracne.4, file = "./save/mi.network.aracne.4")
-#saveRDS.gz(mi.network.clr.4, file = "./save/mi.network.clr.4")
+#symbols.permut <- gen.permuts(symbols.only)
+#ptm <- proc.time()
+#test.permut <- map(symbols.permut[1:20], permut.dtw, intensities.means$Patient, intensities.means$Carrier)
+#final.time <- proc.time() - ptm
+#permut.df <- reduce(test.permut, cbind) %>% data.frame
+#rownames(permut.df) <- symbols.only
 
-#mi.network.mine.4 <- mine(as.matrix(mi.expr.4), master = 1:ncol(mi.expr.4), alpha = 1)
-#mi.network.mine.mic.4 <- mi.network.mine.4$MIC
-#saveRDS.gz(mi.network.mine.4, file = "./save/mi.network.mine.4")
-#saveRDS.gz(mi.network.mine.mic.4, file = "./save/mi.network.mine.mic.4")
+#Permutations run on Hoffman because they are too slow to calculate otherwise
 
-#mine.dist.4 <- 1 - mi.network.mine.mic.4
-#mine.scale.4 <- log2(exp(1)) * mine.dist.4
-#mine.mrnet.4 <- mrnet(mine.scale.4)
-#mine.genes <- colSums(mine.mrnet.4) #%>% sort #%>% Filter(f = Curry(`>`, e2 = 1))
-##Hub Genes
-#mine.genes.hub <- mine.genes[mine.genes > 5] %>% names
+get.pvalue <- function(test.value, dist.vector)
+{
+    num.above <- which(dist.vector > test.value) %>% length
+    return(num.above / length(dist.vector))
+}
 
-##SLC25A3
-#mine.genes.net <- mine.mrnet.4[,mine.genes.hub] %>% data.frame
-#mine.genes.net$Probe_Id <- rownames(mine.genes.net)
-#test.matrix <- filter(mine.genes.net, ILMN_2332713 > 1)
-#test.joined <- merge(test.matrix, annot.reduce)
-#write.xlsx(test.joined, "test1.xlsx")
+permut.pca <- readRDS.gz("./save/permut.df.pca.rda")
+permut.pco <- readRDS.gz("./save/permut.df.pco.rda")
+permut.cc <- readRDS.gz("./save/permut.df.cc.rda")
 
-#saveRDS.gz(mine.mrnet.4, file = "./save/mine.mrnet.4")
-#mine.clr.4 <- clr(mi.network.mine.mic.4)
-#saveRDS.gz(mine.clr.4, file = "./save/mine.clr.4")
-#mine.aracne.4 <- aracne(mi.network.mine.mic.4)
-#saveRDS.gz(mine.aracne.4, file = "./save/mine.aracne.4")
+dtw.sorted <- arrange(dtw.pca, Symbol)
+pvalue.pca <- map2_dbl(dtw.sorted$Patient.vs.Carrier, split(permut.pca, 1:nrow(permut.pca)), get.pvalue)
+pvalue.pco <- map2_dbl(dtw.sorted$Patient.vs.Control, split(permut.pco, 1:nrow(permut.pco)), get.pvalue)
+pvalue.cc <- map2_dbl(dtw.sorted$Carrier.vs.Control, split(permut.cc, 1:nrow(permut.cc)), get.pvalue)
 
-#intensities.carrier <- intensities.4.median[["Carrier"]]
-#ica.genes.carrier <- intensities.4.ica.genes[["Carrier"]] %>% llply(select, Probe_Id) %>% reduce(c) %>% llply(as.character) %>% reduce(c) %>% unique
-#dtw.genes.carrier <- unique(c(dtw.pca.4[1:300,]$Probe_Id, dtw.cc.4[1:300,]$Probe_Id))
+sig.pca <- slice(dtw.sorted, which(pvalue.pca < 0.05))
+sig.pca$pvalue <- pvalue.pca[which(pvalue.pca < 0.05)]
+sig.pca %<>% arrange(pvalue, desc(Patient.vs.Carrier))
+write.xlsx()
 
-#all.genes.carrier <- unique(c(ica.genes.carrier, dtw.genes.carrier)) #%>% paste(collapse = "|")
+sig.pco <- slice(dtw.sorted, which(pvalue.pco < 0.05))
+sig.pco$pvalue <- pvalue.pco[which(pvalue.pco < 0.05)]
+sig.pco %<>% arrange(pvalue, desc(Patient.vs.Control))
 
-#mi.expr.carrier <- slice(intensities.carrier, match(all.genes.carrier, Probe_Id)) #%>% join(annot.reduce)
-#rownames(mi.expr.carrier) <- mi.expr.carrier$Probe_Id
-##mi.expr.carrier %<>% select(-(Probe_Id:Definition)) %>% t
-#mi.expr.carrier %<>% select(-Probe_Id) %>% t
-#saveRDS.gz(mi.expr.carrier, file = "./save/mi.expr.4.rda")
+sig.cc <- slice(dtw.sorted, which(pvalue.cc < 0.05))
+sig.cc$pvalue <- pvalue.cc[which(pvalue.cc < 0.05)]
+sig.cc %<>% arrange(pvalue, desc(Carrier.vs.Control))
 
-#mi.network.mine.carrier <- mine(mi.expr.carrier, master = 1:ncol(mi.expr.carrier), alpha = 1)
-#mi.network.mine.mic.carrier <- mi.network.mine.carrier$MIC
-#saveRDS.gz(mi.network.mine.carrier, file = "./save/mi.network.mine.carrier")
-#saveRDS.gz(mi.network.mine.mic.carrier, file = "./save/mi.network.mine.mic.carrier")
+get.stringdb(sig.cc, "cc.mean", "cc", 900)
+get.stringdb(sig.pca, "pca.mean", "pca", 900)
+get.stringdb(sig.pco, "pco.mean", "pco", 900)
 
-#mine.dist.carrier <- 1 - mi.network.mine.mic.carrier
-#mine.scale.carrier <- log2(exp(1)) * mine.dist.carrier
-#mine.mrnet.carrier <- mrnet(mine.scale.carrier)
+dtw.cc.m.enrichr <- map(enrichr.terms, get.enrichrdata, sig.cc, FALSE)
+names(dtw.cc.m.enrichr) <- enrichr.terms
+map(names(dtw.cc.m.enrichr), enrichr.wkbk, dtw.cc.m.enrichr, "./enrichr/cc.mean")
 
-#intensities.control <- intensities.4.median[["Control"]]
-#ica.genes.control <- intensities.4.ica.genes[["Control"]] %>% llply(select, Probe_Id) %>% reduce(c) %>% llply(as.character) %>% reduce(c) %>% unique
-#dtw.genes.control <- unique(c(dtw.pco.4[1:300,]$Probe_Id, dtw.cc.4[1:300,]$Probe_Id))
+dtw.pca.m.enrichr <- map(enrichr.terms, get.enrichrdata, sig.pca, FALSE)
+names(dtw.pca.m.enrichr) <- enrichr.terms
+map(names(dtw.pca.m.enrichr), enrichr.wkbk, dtw.pca.m.enrichr, "./enrichr/pca.mean")
 
-#all.genes.control <- unique(c(ica.genes.control, dtw.genes.control)) #%>% paste(collapse = "|")
-
-#mi.expr.control <- slice(intensities.control, match(all.genes.control, Probe_Id)) #%>% join(annot.reduce)
-#rownames(mi.expr.control) <- mi.expr.control$Probe_Id
-##mi.expr.control %<>% select(-(Probe_Id:Definition)) %>% t
-#mi.expr.control %<>% select(-Probe_Id) %>% t
-#saveRDS.gz(mi.expr.control, file = "./save/mi.expr.4.rda")
-
-#mi.network.mine.control <- mine(mi.expr.control, master = 1:ncol(mi.expr.control), alpha = 1)
-#mi.network.mine.mic.control <- mi.network.mine.control$MIC
-#saveRDS.gz(mi.network.mine.control, file = "./save/mi.network.mine.control")
-#saveRDS.gz(mi.network.mine.mic.control, file = "./save/mi.network.mine.mic.control")
-
-#mine.dist.control <- 1 - mi.network.mine.mic.control
-#mine.scale.control <- log2(exp(1)) * mine.dist.control
-#mine.mrnet.control <- mrnet(mine.scale.control)
-#intensities.8.median$Probe_Id %<>% as.character
-#ica.genes <- intensities.8.ica.genes %>% llply(select, Probe_Id) %>% reduce(c) %>% llply(as.character) %>% reduce(c) %>% unique
-#dtw.genes <- unique(c(dtw.pca.4[1:300,]$Probe_Id, dtw.pco.4[1:300,]$Probe_Id))
-
-#skewed.genes <- apply(select(intensities.8.median, -Probe_Id), 1, anscombe.test) %>% llply(`[`, "p.value") %>% reduce(c) %>% reduce(c)
-#skewed.genes.index <- which(skewed.genes < 0.05)
-#anscombe.genes <- slice(intensities.8.median, skewed.genes.index)$Probe_Id
-
-#skewed.genes.j <- apply(select(intensities.8.median, -Probe_Id), 1, jarque.test) %>% llply(`[`, "p.value") %>% reduce(c) %>% reduce(c)
-#skewed.genes.j.index <- which(skewed.genes.j < 0.05)
-#jarque.genes <- slice(intensities.8.median, skewed.genes.j.index)$Probe_Id
-#all.genes <- unique(c(ica.genes, dtw.genes, anscombe.genes, jarque.genes)) #%>% paste(collapse = "|")
-
-#ica.expr.8 <- slice(intensities.8.median, match(all.genes, Probe_Id)) %>% join(annot.reduce)
-#rownames(ica.expr) <- ica.expr$Probe_Id
-#ica.expr.8 %<>% select(-(Probe_Id:Definition)) %>% t
-#save(ica.expr.8, file = "./save/icr.expr.rda")
-
-#mi.network.mrnet <- minet(ica.expr, method = "mrnet", estimator = "mi.shrink", disc = "equalfreq")
-#mi.network.aracne <- minet(ica.expr, method = "aracne", estimator = "mi.shrink", disc = "equalfreq")
-#mi.network.clr <- minet(ica.expr, method = "clr", estimator = "mi.shrink", disc = "equalfreq")
-#saveRDS.gz(mi.network.mrnet, file = "./save/mi.network.mrnet")
-#saveRDS.gz(mi.network.aracne, file = "./save/mi.network.aracne")
-#saveRDS.gz(mi.network.clr, file = "./save/mi.network.clr")
-#CairoPDF("test.pdf", width = 6, height = 6)
-#plot(as(mi.network.mrnet, "graphNEL"))
-#dev.off()
-
-#mi.network.mine <- mine(as.matrix(ica.expr), master = 1:ncol(ica.expr), alpha = 1)
-#mi.network.mine.mic <- mi.network.mine$MIC
-#saveRDS.gz(mi.network.mine, file = "./save/mi.network.mine")
-#saveRDS.gz(mi.network.mine.mic, file = "./save/mi.network.mine.mic")
-#mine.mrnet <- mrnet(mi.network.mine.mic)
-#saveRDS.gz(mine.mrnet, file = "./save/mine.mrnet")
-#mine.clr <- clr(mi.network.mine.mic)
-#saveRDS.gz(mine.clr, file = "./save/mine.clr")
-#mine.aracne <- aracne(mi.network.mine.mic)
-#saveRDS.gz(mine.aracne, file = "./save/mine.aracne")
+dtw.pco.m.enrichr <- map(enrichr.terms, get.enrichrdata, sig.cc, FALSE)
+names(dtw.pco.m.enrichr) <- enrichr.terms
+map(names(dtw.pco.m.enrichr), enrichr.wkbk, dtw.pco.m.enrichr, "./enrichr/pco.mean")

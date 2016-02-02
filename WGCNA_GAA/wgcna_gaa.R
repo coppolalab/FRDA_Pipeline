@@ -6,6 +6,10 @@ enableWGCNAThreads()
 #For baseline processing
 library(limma)
 library(sva)
+library(lumi)
+library(lumiHumanAll.db)
+library(annotate)
+library(R.utils)
 
 #Functional programming
 library(magrittr)
@@ -101,25 +105,6 @@ readRDS.gz <- function(file,threads=parallel::detectCores()) {
   return(object)
 }
 
-load(file = "../WGCNA/save/intensities.rmreps.rda")
-load(file = "../WGCNA/save/targets.final.known.rda")
-load(file = "../WGCNA/save/annot.reduce.rda")
-source("../common_functions.R")
-
-#repeat1 <- apply(select(targets.final.gaa, GAA1:GAA2), 1, min)
-#repeat2 <- apply(select(targets.final.gaa, GAA1:GAA2), 1, max)
-targets.final.known$GAA1 %<>% as.numeric
-targets.final.known$GAA2 %<>% as.numeric
-
-targets.final.gaa <- filter(targets.final.known, (!is.na(GAA1) | !is.na(GAA2)) & !is.na(Onset))
-hell.conditions <- targets.final.gaa$GAA1 < 40 & !is.na(targets.final.gaa$GAA1)
-#targets.final.gaa[hell.conditions,]$GAA1 <- NA
-targets.final.gaa[is.na(targets.final.gaa$GAA1),]$GAA1 <- targets.final.gaa[is.na(targets.final.gaa$GAA1),]$GAA2
-
-intensities.gaa <- select(data.frame(intensities.rmreps), one_of(targets.final.gaa$Sample.Name)) %>% as.matrix %>% normalizeBetweenArrays
-
-targets.final.gaa$Sample.Num %<>% str_replace("1r", "1")
-
 plot.cor <- function(expr.row, gaa.repeats)
 {
     symbol <- expr.row["Symbol"]
@@ -140,209 +125,45 @@ plot.cor <- function(expr.row, gaa.repeats)
     dev.off()
 }
 
-gaa.cor.spearman <- apply(intensities1.gaa, 1, cor, targets1.gaa$GAA1, method = "spearman")
-gaa.cor.bicor <- apply(intensities1.gaa, 1, bicor, targets1.gaa$GAA1, nThreads = 7)
+plot.eigencor <- function(module.traits.pval, col.name, pheno.vector)
+{
+    sig.col <- paste(col.name, ".p.value", sep = "")
+    cor.status.labeled <- data.frame(Color = rownames(module.traits.pval), select_(data.frame(module.traits.pval), sig.col))
+    filter.cond <- paste(sig.col, "< 0.05")
+    colors.sig <- filter_(cor.status.labeled, filter.cond)
+    me.genes.subset <- select(ME.genes, one_of(as.character(colors.sig$Color)))
+    me.genes.subset[[col.name]] <- pheno.vector
+    me.subset.melt <- melt(me.genes.subset, id.vars = col.name) 
+    colnames(me.subset.melt)[2] <- "Module"
 
-model.sex.full <- model.matrix(~ 0 + factor(targets.final.gaa$Sex))[,-1]
-targets.final.gaa$Draw.Age %<>% as.numeric 
-draw.age.cov <- log2(targets.final.gaa$Draw.Age)
-targets.final.gaa$Diff.Baseline %<>% as.numeric
-diff.baseline.cov <- targets.final.gaa$Diff.Baseline
-diff.baseline.cov[diff.baseline.cov != 0] %<>% log2
-targets.final.gaa$Onset %<>% as.numeric
+    me.subset.melt$Module %<>% as.character
+    p <- ggplot(me.subset.melt, aes_string(x = col.name, y = "value", col = "Module")) + geom_point(position = "jitter")
+    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    p <- p + theme(axis.ticks.x = element_blank()) + ylab("Eigengene") + stat_smooth(method = "lm", se = FALSE)
+    p <- p + theme(axis.title.x = element_blank()) + scale_x_continuous(as.numeric(unique(pheno.vector)))
+    p <- p + scale_color_manual(values = sort(unique(me.subset.melt$Module)))
+    p <- p + facet_wrap(~ Module, scales = "free_y") + stat_smooth(method = "lm", se = TRUE)
+    p <- p + theme(legend.position = "none")
 
-covariates.full <- cbind(Sex = model.sex.full, Age = draw.age.cov, GAA1 = log2(targets.final.gaa$GAA1), Onset = log2(targets.final.gaa$Onset), Diff.Baseline = diff.baseline.cov, RIN = log2(targets.final.gaa$RIN))
+    filename <- paste(col.name, "_eigengenes_05", sep = "")
+    CairoPDF(filename, height = 13, width = 20)
+    print(p)
+    dev.off()
+}
 
-intensities.combat <- ComBat(dat = intensities.gaa, batch = factor(targets.final.gaa$Batch), mod = covariates.full)
-saveRDS.gz(intensities.combat, file = "./save/intensities.combat.rda")
-
-#change to 6
-gen.peer(10, intensities.combat, TRUE, covariates.full)
-PEER.precision <- read_csv("./precision_10.csv")
-PEER.precision$Factor <- rownames(PEER.precision)
-data.plot <- PEER.precision[-c(1:6),]
-colnames(data.plot)[1] <- "Precision"
-p <- ggplot(data.plot, aes(x = as.numeric(Factor), y = Precision, group = 1)) + geom_line()
-CairoPDF("./precision_reduced")
-print(p)
-dev.off()
-
-PEER.weights.plot <- select(read_csv("./weight_10.csv"), -(X1:X7))
-PEER.weights.sums <- colSums(abs(PEER.weights.plot)) %>% data.frame
-PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums)
-colnames(PEER.weights.sums)[1] <- "Weight"
-
-p <- ggplot(PEER.weights.sums, aes(x = factor(Factor), y = as.numeric(Weight), group = 1)) + geom_line(color = "blue") 
-p <- p + theme_bw() + xlab("Factor") + ylab("Weigtht")
-CairoPDF("./PEER_weights", height = 4, width = 6)
-print(p)
-dev.off()
-
-PEER.weights <- read_csv("./weight_10.csv") %>% select(-(X3:X5), -X7)
-PEER.factors <- read_csv("./factor_10.csv") %>% select(-(X3:X5), -X7)
-PEER.residuals <- as.matrix(PEER.factors) %*% t(as.matrix(PEER.weights)) %>% t
-intensities.PEER <- intensities.combat - PEER.residuals
-saveRDS.gz(intensities.PEER, file = "./save/intensities.peer.rda")
-
-targets1.gaa <- filter(targets.final.gaa, Sample.Num == "1")
-intensities1.gaa <- select(data.frame(intensities.PEER), one_of(targets1.gaa$Sample.Name)) %>% as.matrix %>% normalizeBetweenArrays
-
-gaa.cor <- apply(intensities1.gaa, 1, cor, targets1.gaa$GAA1)
-gaa.cor.pval <- corPvalueStudent(gaa.cor, length(targets1.gaa$GAA1))
-cor.df <- cbind(gaa.cor, gaa.cor.pval) %>% data.frame
-colnames(cor.df) <- c("Correlation", "P.value")
-cor.df$Probe_Id <- rownames(intensities1.gaa)
-cor.df %<>% arrange(P.value)
-cor.joined <- join(cor.df, annot.reduce)
-
-cor.probes <- c("ILMN_1726589", "ILMN_1659688", "ILMN_1703524", "ILMN_1765796", "ILMN_2184373", "ILMN_1745172", "ILMN_1747344") %>% paste(collapse = "|")
-intensities1.cor <- data.frame(Probe_Id = rownames(intensities1.gaa), intensities1.gaa) %>% filter(grepl(cor.probes, Probe_Id))
-annot.symbol <- select(annot.reduce, Probe_Id, Symbol)
-intensities1.joined <- join(intensities1.cor, annot.symbol)
-apply(intensities1.joined, 1, plot.cor, targets1.gaa$GAA1)
-#Calculate coefficient of variation for all genes and then rank them using this
-expr.data.PEER <- gen.cv(intensities.PEER)
-saveRDS.gz(expr.data.PEER, file = "./save/expr.data.PEER.rda")
-
-#Calculate scale free topology measures for different values of power adjacency function
-powers <- c(c(1:10), seq(from = 12, to = 39, by = 2))
-
-sft.PEER <- pickSoftThreshold(expr.data.PEER, powerVector = powers, verbose = 5, networkType = "signed")
-sft.PEER.df <- sft.PEER$fitIndices
-saveRDS.gz(sft.PEER, file = "./save/sft.peer.rda")
-
-#Plot scale indendence and mean connectivity as functions of power
-sft.PEER.df$multiplied <- sft.PEER.df$SFT.R.sq * -sign(sft.PEER.df$slope)
-p <- ggplot(sft.PEER.df, aes(x = Power,  y = multiplied, label = Power)) + geom_point() + geom_text(vjust = -0.6, size = 4, col = "red")
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + geom_hline(aes(yintercept = 0.9))
-p <- p + xlab("Soft Threshold") + ylab("Scale Free Topology Model Fit, signed R^2") + ggtitle("Scale Independence")
-CairoPDF(file = "./scaleindependence", width = 6, height = 6)
-print(p)
-dev.off()
-
-p <- ggplot(sft.PEER.df, aes(x = Power,  y = mean.k.)) + geom_point() 
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + xlab("Soft Threshold") + ylab("Mean Connectivity") + ggtitle("Mean Connectivity")
-CairoPDF(file = "./meanconnectivity", width = 6, height = 6)
-print(p)
-dev.off()
-
-softPower <- 7
-adjacency.PEER <- adjacency(expr.data.PEER, power = softPower, type = "signed")
-saveRDS.gz(adjacency.PEER, file = "./save/adjacency.PEER.rda")
-
-TOM.PEER <- TOMsimilarity(adjacency.PEER)
-dissimilarity.TOM <- 1 - TOM.PEER
-saveRDS.gz(TOM.PEER, file = "./save/tom.PEER.rda")
-saveRDS.gz(dissimilarity.TOM, file = "./save/dissimilarity.TOM.rda")
-
-geneTree = flashClust(as.dist(dissimilarity.TOM), method = "average")
-saveRDS.gz(geneTree, file = "./save/gene.tree.rda")
-
-CairoPDF(file = "./1-genecluster", height = 10, width = 15)
-plot(geneTree, xlab = "", sub = "", main = "Gene clustering on TOM-based dissimilarity", labels = FALSE, hang = 0.04)
-dev.off()
-
-min.module.size <- 50
-
-#Identify modules using dynamic tree cutting with hybrid clustering
-dynamic.modules <- cutreeDynamic(dendro = geneTree, method = "hybrid", distM = dissimilarity.TOM, cutHeight = 0.995, deepSplit = 2, pamRespectsDendro = FALSE, minClusterSize = min.module.size, verbose = 2)
-dynamic.colors <- labels2colors(dynamic.modules)
-saveRDS.gz(dynamic.colors, file = "./save/dynamic.colors.rda")
-
-CairoPDF(file = "./1-gene_dendrogram_and_module_colors_min50", height = 10, width = 15)
-plotDendroAndColors(geneTree, dynamic.colors, "Dynamic Tree Cut", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05)
-dev.off()
-
-#Calculate module eigengenes
-ME.list <- moduleEigengenes(expr.data.PEER, colors = dynamic.colors, softPower = softPower, nPC = 1)
-ME.genes <- ME.list$eigengenes
-MEDiss <- 1 - cor(ME.genes)
-METree <- flashClust(as.dist(MEDiss), method = "average")
-saveRDS.gz(METree, file = "./save/me.tree.rda")
-
-CairoPDF(file = "./3-module_eigengene_clustering_min50", height = 10, width = 15)
-plot(METree, xlab = "", sub = "", main = "")
-dev.off()
-
-#Check if any modules are too similar and merge them.  Possibly not working.
-ME.dissimilarity.threshold <- 0.05
-merge.all <- mergeCloseModules(expr.data.PEER, dynamic.colors, cutHeight = ME.dissimilarity.threshold, verbose = 3) #PC analysis may be failing because of Intel MKL Lapack routine bug.  Test with openBLAS in R compiled with gcc.
-merged.colors <- merge.all$colors
-merged.genes <- merge.all$newMEs
-
-CairoPDF("4-module_eigengene_clustering_min50", height = 10, width = 15)
-plotDendroAndColors(geneTree, cbind(dynamic.colors, merged.colors), c("Dynamic Tree Cut", "Merged dynamic"), dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "")
-dev.off()
-
-#Use merged eigengenes 
-module.colors <- merged.colors
-saveRDS.gz(module.colors, file = "./save/module.colors.rda")
-color.order <- c("grey", standardColors(50))
-modules.labels <- match(module.colors, color.order)
-saveRDS.gz(modules.labels, file = "./save/modules.labels.rda")
-ME.genes <- merged.genes
-saveRDS.gz(ME.genes, file = "./save/me.genes.rda")
-
-all.degrees <- intramodularConnectivity(adjacency.PEER, module.colors)
-expr.data.t <- mutate(data.frame(t(expr.data.PEER)), Probe_Id = colnames(expr.data.PEER)) 
-gene.info.join <- join(expr.data.t, annot.reduce)
-gene.info <- select(gene.info.join, Probe_Id:Definition) %>% mutate(module.colors = module.colors, mean.count = apply(expr.data.PEER, 2, mean)) %>% data.frame(all.degrees)
-
-CairoPDF("5-eigengenes", height = 10, width = 18)
-par(cex = 0.7)
-plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
-dev.off()
-
-write_csv(data.frame(table(module.colors)), path = "./final_eigengenes.csv") 
-gene.info$kscaled <- by(gene.info, gene.info$module.colors, select, kWithin) %>% llply(function(x) { x / max (x) }) %>% reduce(c)
-saveRDS.gz(gene.info, file = "./save/gene.info.rda")
-
-gene.module.membership <- as.data.frame(cor(expr.data.PEER, ME.genes, use = "p"))
-module.membership.pvalue <- as.data.frame(corPvalueStudent(as.matrix(gene.module.membership), nrow(expr.data.PEER)))
-names(gene.module.membership) <- str_replace(names(ME.genes),"ME", "MM.")
-colnames(module.membership.pvalue) <- str_replace(names(ME.genes),"ME", "MM.pvalue.")
-
-module.membership <- cbind(select(gene.info, Probe_Id:Definition), gene.module.membership, module.membership.pvalue)
-write_csv(module.membership, "module_membership.csv")
-
-colnames(gene.module.membership) %<>% str_replace("MM.", "")
-colnames(module.membership.pvalue) %<>% str_replace("MM.pvalue.", "")
-gene.module.membership$Probe_Id <- rownames(gene.module.membership)
-module.membership.pvalue$Probe_Id <- rownames(module.membership.pvalue)
-
-gene.module.membership.long <- gather(gene.module.membership, module.comparison, correlation, lightgreen:darkred)
-module.membership.pvalue.long <- gather(module.membership.pvalue, module.comparison, p.value, lightgreen:darkred)
-membership.join <- join(gene.module.membership.long, module.membership.pvalue.long)
-eigengene.connectivity <- join(membership.join, gene.info) %>% select(Probe_Id, Accession:kscaled, module.comparison:p.value)
-write_csv(eigengene.connectivity, "eigengene_connectivity.csv")
-
-all.smooth <- apply(ME.genes, 2, smooth.spline, spar = 0.4) %>% llply(`[`, "y") 
-smooth.df <- data.frame(all.smooth)
-colnames(smooth.df) <- names(all.smooth)
-smooth.df$x <- as.factor(1:nrow(smooth.df))
-smooth.plot <- melt(smooth.df, id.vars = "x")
-
-gen.pcaplot("all_principal_components", smooth.plot, FALSE, 10, 15)
-gen.pcaplot("facet_principal_components", smooth.plot, TRUE, 13, 25)
-
-sample.ids <- factor(rownames(expr.data.PEER), levels = rownames(expr.data.PEER))
-colnames(ME.genes) %<>% str_replace("ME", "")
-ME.genes.plot <- mutate(data.frame(ME.genes), Sample.ID = sample.ids)
-expr.data.plot <- data.frame(t(expr.data.PEER), module.colors)
-cluster <- makeForkCluster(8)
-split(expr.data.plot, expr.data.plot$module.colors) %>% parLapply(cl = cluster, gen.heatmap, ME.genes.plot)
-
-modules.out <- select(expr.data.plot, module.colors)
-modules.out$Probe_Id <- rownames(modules.out)
-modules.out %<>% join(annot.reduce)
-write.xlsx(modules.out, "modules_out.xlsx")
-source("../GO/enrichr.R")
-
-enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
-#enrichr.submit("blue", modules.out, enrichr.terms, FALSE)
-color.names <- unique(module.colors) %>% sort
-l_ply(color.names, enrichr.submit, modules.out, enrichr.terms, FALSE)
+gen.boxplot <- function(filename, lumi.object, colorscheme, maintext, ylabtext)
+{
+    #dataset %<>% t %>% data.frame
+    expr.df <- exprs(lumi.object) %>% t %>% data.frame
+    dataset.addvars <- mutate(expr.df, Sample.Status = sampleNames(lumi.object), Batch = lumi.object$Batch)
+    dataset.m <- melt(dataset.addvars, id = c("Sample.Status", "Batch"))
+    p <- ggplot(dataset.m, aes(x = Sample.Status, y = value, fill = factor(Batch))) + geom_boxplot() + theme_bw()
+    p <- p + scale_fill_manual(values = colorscheme)
+    p <- p + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1.0, size = 5))     
+    p <- p + ggtitle(maintext) + ylab(ylabtext) + xlab("Sample") + theme(axis.text.x = element_text(size = 3))
+    p <- p + theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    ggsave(filename = filename, plot = p, family = "Oxygen", width = 20 , height = 8)
+}
 
 enrichr.submit <- function(index, full.df, enrichr.terms, use.weights)
 {
@@ -370,8 +191,260 @@ enrichr.wkbk <- function(subindex, full.df, index)
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-targets.final.gaa$Sample.Name %<>% str_replace(" ", "")
+lumi.import <- readRDS.gz(file = "../baseline_lumi/save/lumi.baseline.rda")
+remove.all <- readRDS.gz(file = "../baseline_lumi/save/remove.all.rda")
+source("../common_functions.R")
+
+lumi.rmreps <- lumi.import[,remove.all] #Remove the previously dropped samples
+patient.key <- !(is.na(lumi.rmreps$GAA1)) & !(is.na(lumi.rmreps$Onset)) #Select only patients with known GAA repeat length and Onset
+batch.key <- !(lumi.rmreps$Batch == 8) & !(lumi.rmreps$Batch == 14) #Remove batches 8 and 14 because they only have one array each and this messes up ComBat
+rin.key <- !(lumi.rmreps$RIN < 5.0) #Remove low RIN samples.  Needs to be done at the main preprocessing level instead
+remove.new <- patient.key & batch.key & rin.key
+lumi.patient <- lumi.rmreps[,remove.new]
+
+saveRDS.gz(lumi.patient, file = "./save/lumi.patient.rda")
+lumi.patient.norm <- lumiN(lumi.patient, method = "rsn") #Normalize with robust spline regression
+lumi.patient.qual <- lumiQ(lumi.patient.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
+
+qcsum <- lumi.patient.qual@QC$sampleSummary %>% t %>% data.frame
+colnames(qcsum) %<>% str_replace("\\.0\\.01\\.", "")
+qcsum$Sample.Name <- rownames(qcsum)
+qcsum$RIN <- lumi.patient.qual$RIN
+qcsum$Sample.Num <- lumi.patient.qual$Sample.Num
+#plot(lumi.patient.qual, what = 'sampleRelation')
+
+lumi.patient.cutoff <- detectionCall(lumi.patient.qual) #Get the count of probes which passed the detection threshold per sample
+lumi.patient.expr <- lumi.patient.qual[which(lumi.patient.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
+symbols.lumi.patient <- getSYMBOL(rownames(lumi.patient.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
+lumi.patient.annot <- lumi.patient.expr[!symbols.lumi.patient,] #Drop any probe which is not annotated
+saveRDS.gz(lumi.patient.annot, file = "./save/lumi.patient.annot.rda")
+
+#Use ComBat for batch effect correction
+model.sex <- model.matrix( ~ 0 + factor(lumi.patient.annot$Sex) )
+colnames(model.sex) <- c("Female", "Male")
+model.sex.reduce <- model.sex[,-1]
+
+model.combat <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.patient.annot$Draw.Age), RIN = lumi.patient.annot$RIN, GAA = lumi.patient.annot$GAA1, Onset = as.numeric(lumi.patient.annot$Onset))
+
+expr.combat <- ComBat(dat = exprs(lumi.patient.annot), batch = factor(lumi.patient.annot$Batch), mod = model.combat)
+lumi.combat <- lumi.patient.annot
+exprs(lumi.combat) <- expr.combat
+saveRDS.gz(lumi.combat, file = "./save/lumi.combat.rda")
+
+#Run PEER analysis and correlate to known covariates
+gen.peer(8, exprs(lumi.combat), TRUE, model.combat)
+PEER.weights.plot <- read_csv("./weight_8.csv") %>% select(-(X1:X6))
+PEER.weights.sums <- colSums(abs(PEER.weights.plot)) %>% data.frame
+PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums)
+colnames(PEER.weights.sums)[1] <- "Weight"
+
+p <- ggplot(PEER.weights.sums, aes(x = factor(Factor), y = as.numeric(Weight), group = 1)) + geom_line(color = "blue") 
+p <- p + theme_bw() + xlab("Factor") + ylab("Weigtht")
+CairoPDF("./PEER_weights", height = 4, width = 6)
+print(p)
+dev.off()
+
+model.PEER_covariate <- read_csv("./factor_8.csv") %>% select(-(X1:X6))
+model.cov <- cbind(Male = model.sex.reduce, Age = lumi.combat$Draw.Age, RIN = lumi.combat$RIN)
+model.full.cov <- cbind(model.cov, model.PEER_covariate)
+cleaned.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.full.cov)
+lumi.cleaned <- lumi.combat
+exprs(lumi.cleaned) <- cleaned.expr
+saveRDS.gz(lumi.cleaned, file = "./save/lumi.cleaned.rda")
+
+batch.colors <- c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green")
+gen.boxplot("baseline_intensity_corrected.jpg", lumi.cleaned, batch.colors, "Covariate-corrected intensity", "Intensity")
+
+fdata <- fData(lumi.cleaned)
+lumi.cleaned <- lumi.cleaned[!is.na(fdata$SYMBOL),]
+fdata <- fData(lumi.cleaned)
+pdata <- pData(lumi.cleaned)
+expr.collapse <- collapseRows(exprs(lumi.cleaned), factor(fdata$SYMBOL), rownames(lumi.cleaned), method = "function", methodFunction = colMeans)$datETcollapsed
+saveRDS.gz(expr.collapse, "./save/expr.collapse.rda")
+
+#Plot GSTM3 vs GAA
+gstm.cor <- filter(cor.df, Symbol == "GSTM3")
+gstm.df <- data.frame(Expression = expr.collapse["GSTM3",], GAA = pdata$GAA1)
+p <- ggplot(gstm.df, aes(x = GAA, y = Expression)) + geom_point() + geom_smooth(method = lm) + xlab("GAA1 (# of GAA repeats)") + ylab("VST normalized Expression")
+CairoPDF("gstm_gaa", width = 7, height = 5)
+print(p)
+dev.off()
+
+#Correlations
+gaa.cor <- apply(expr.collapse, 1, cor, lumi.cleaned$GAA1)
+gaa.cor.pval <- corPvalueStudent(gaa.cor, length(lumi.cleaned$GAA1)) %>% p.adjust("fdr")
+cor.df <- cbind(gaa.cor, gaa.cor.pval) %>% data.frame
+colnames(cor.df) <- c("Correlation", "P.value")
+#cor.df$nuId <- featureNames(lumi.cleaned)
+cor.df$Symbol <- rownames(expr.collapse)
+#cor.df$Definition <- featureData(lumi.cleaned)@data$DEFINITION
+cor.df %<>% arrange(P.value)
+cor.df.sg <- filter(cor.df, P.value < 0.05)
+write.xlsx(cor.df.sg, "significant_gaa.xlsx")
+
+#cor.probes <- c("ILMN_1726589", "ILMN_1659688", "ILMN_1703524", "ILMN_1765796", "ILMN_2184373", "ILMN_1745172", "ILMN_1747344") %>% paste(collapse = "|")
+#intensities1.cor <- data.frame(Probe_Id = rownames(intensities1.gaa), intensities1.gaa) %>% filter(grepl(cor.probes, Probe_Id))
+#annot.symbol <- select(annot.reduce, Probe_Id, Symbol)
+#intensities1.joined <- join(intensities1.cor, annot.symbol)
+#apply(intensities1.joined, 1, plot.cor, targets1.gaa$GAA1)
+
+#Calculate scale free topology measures for different values of power adjacency function
+powers <- c(c(1:10), seq(from = 12, to = 39, by = 2))
+
+expr.data.PEER <- t(expr.collapse)
+saveRDS.gz(expr.data.PEER, file = "./save/expr.data.PEER.rda")
+sft.PEER <- pickSoftThreshold(expr.data.PEER, powerVector = powers, verbose = 5, networkType = "signed")
+sft.PEER.df <- sft.PEER$fitIndices
+saveRDS.gz(sft.PEER, file = "./save/sft.peer.rda")
+
+#Plot scale indendence and mean connectivity as functions of power
+sft.PEER.df$multiplied <- sft.PEER.df$SFT.R.sq * -sign(sft.PEER.df$slope)
+p <- ggplot(sft.PEER.df, aes(x = Power,  y = multiplied, label = Power)) + geom_point() + geom_text(vjust = -0.6, size = 4, col = "red")
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + geom_hline(aes(yintercept = 0.9))
+p <- p + xlab("Soft Threshold") + ylab("Scale Free Topology Model Fit, signed R^2") + ggtitle("Scale Independence")
+CairoPDF(file = "./scaleindependence", width = 6, height = 6)
+print(p)
+dev.off()
+
+p <- ggplot(sft.PEER.df, aes(x = Power,  y = mean.k.)) + geom_point() 
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p <- p + xlab("Soft Threshold") + ylab("Mean Connectivity") + ggtitle("Mean Connectivity")
+CairoPDF(file = "./meanconnectivity", width = 6, height = 6)
+print(p)
+dev.off()
+
+softPower <- 10
+adjacency.PEER <- adjacency(expr.data.PEER, power = softPower, type = "signed")
+saveRDS.gz(adjacency.PEER, file = "./save/adjacency.PEER.rda")
+
+TOM.PEER <- TOMsimilarity(adjacency.PEER)
+dissimilarity.TOM <- 1 - TOM.PEER
+saveRDS.gz(TOM.PEER, file = "./save/tom.PEER.rda")
+saveRDS.gz(dissimilarity.TOM, file = "./save/dissimilarity.TOM.rda")
+
+geneTree = flashClust(as.dist(dissimilarity.TOM), method = "average")
+saveRDS.gz(geneTree, file = "./save/gene.tree.rda")
+
+CairoPDF(file = "./genecluster", height = 10, width = 15)
+plot(geneTree, xlab = "", sub = "", main = "Gene clustering on TOM-based dissimilarity", labels = FALSE, hang = 0.04)
+dev.off()
+
+min.module.size <- 50
+
+#Identify modules using dynamic tree cutting with hybrid clustering
+dynamic.modules <- cutreeDynamic(dendro = geneTree, method = "hybrid", distM = dissimilarity.TOM, cutHeight = 0.995, deepSplit = 2, pamRespectsDendro = FALSE, minClusterSize = min.module.size, verbose = 2)
+dynamic.colors <- labels2colors(dynamic.modules)
+saveRDS.gz(dynamic.colors, file = "./save/dynamic.colors.rda")
+
+CairoPDF(file = "./gene_dendrogram_and_module_colors_min50", height = 10, width = 15)
+plotDendroAndColors(geneTree, dynamic.colors, "Dynamic Tree Cut", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05)
+dev.off()
+
+#Calculate module eigengenes
+ME.list <- moduleEigengenes(expr.data.PEER, colors = dynamic.colors, softPower = softPower, nPC = 1)
+ME.genes <- ME.list$eigengenes
+MEDiss <- 1 - cor(ME.genes)
+METree <- flashClust(as.dist(MEDiss), method = "average")
+saveRDS.gz(METree, file = "./save/me.tree.rda")
+
+CairoPDF(file = "./module_eigengene_clustering_min50", height = 10, width = 15)
+plot(METree, xlab = "", sub = "", main = "")
+dev.off()
+
+#Check if any modules are too similar and merge them.  Possibly not working.
+ME.dissimilarity.threshold <- 0.05
+merge.all <- mergeCloseModules(expr.data.PEER, dynamic.colors, cutHeight = ME.dissimilarity.threshold, verbose = 3) #PC analysis may be failing because of Intel MKL Lapack routine bug.  Test with openBLAS in R compiled with gcc.
+merged.colors <- merge.all$colors
+merged.genes <- merge.all$newMEs
+
+CairoPDF("module_eigengene_clustering_min50", height = 10, width = 15)
+plotDendroAndColors(geneTree, cbind(dynamic.colors, merged.colors), c("Dynamic Tree Cut", "Merged dynamic"), dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "")
+dev.off()
+
+#Use merged eigengenes 
+module.colors <- merged.colors
+saveRDS.gz(module.colors, file = "./save/module.colors.rda")
+color.order <- c("grey", standardColors(50))
+modules.labels <- match(module.colors, color.order)
+saveRDS.gz(modules.labels, file = "./save/modules.labels.rda")
+ME.genes <- merged.genes
+saveRDS.gz(ME.genes, file = "./save/me.genes.rda")
+
+CairoPDF("eigengenes", height = 10, width = 18)
+par(cex = 0.7)
+plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
+dev.off()
+
+all.degrees <- intramodularConnectivity(adjacency.PEER, module.colors)
+colnames(fdata) %<>% tolower %>% capitalize
+gene.info <- data.frame(Symbol = rownames(all.degrees), module.color = module.colors, all.degrees)
+
+write_csv(data.frame(table(module.colors)), path = "./final_eigengenes.csv") 
+gene.info$kscaled <- by(gene.info, gene.info$module.color, select, kWithin) %>% llply(function(x) { x / max (x) }) %>% reduce(c)
+saveRDS.gz(gene.info, file = "./save/gene.info.rda")
+
+gene.module.membership <- as.data.frame(cor(expr.data.PEER, ME.genes, use = "p"))
+module.membership.pvalue <- as.data.frame(corPvalueStudent(as.matrix(gene.module.membership), nrow(expr.data.PEER)))
+names(gene.module.membership) <- str_replace(names(ME.genes),"ME", "MM.")
+colnames(module.membership.pvalue) <- str_replace(names(ME.genes),"ME", "MM.pvalue.")
+
+module.membership <- cbind(select(gene.info, Symbol:module.color), gene.module.membership, module.membership.pvalue)
+write_csv(module.membership, "module_membership.csv")
+
+colnames(gene.module.membership) %<>% str_replace("MM.", "")
+colnames(module.membership.pvalue) %<>% str_replace("MM.pvalue.", "")
+gene.module.membership$Symbol <- rownames(gene.module.membership)
+module.membership.pvalue$Symbol <- rownames(module.membership.pvalue)
+
+color.values <- unique(module.colors)
+gene.module.membership.long <- gather_(data = gene.module.membership, "module.comparison", "correlation", color.values)
+module.membership.pvalue.long <- gather_(data = module.membership.pvalue, "module.comparison", "p.value", color.values)
+membership.join <- join(gene.module.membership.long, module.membership.pvalue.long)
+eigengene.connectivity <- join(membership.join, gene.info) %>% select(Symbol, module.color:kscaled, module.comparison:p.value)
+write_csv(eigengene.connectivity, "eigengene_connectivity.csv")
+
+all.smooth <- apply(ME.genes, 2, smooth.spline, spar = 0.4) %>% llply(`[`, "y") 
+smooth.df <- data.frame(all.smooth)
+colnames(smooth.df) <- names(all.smooth)
+smooth.df$x <- as.factor(1:nrow(smooth.df))
+smooth.plot <- melt(smooth.df, id.vars = "x")
+
+gen.pcaplot("all_principal_components", smooth.plot, FALSE, 10, 15)
+gen.pcaplot("facet_principal_components", smooth.plot, TRUE, 13, 25)
+
+sample.ids <- factor(rownames(expr.data.PEER), levels = rownames(expr.data.PEER))
+colnames(ME.genes) %<>% str_replace("ME", "")
+ME.genes.plot <- mutate(data.frame(ME.genes), Sample.ID = sample.ids)
+expr.data.plot <- data.frame(t(expr.data.PEER), module.colors)
+cluster <- makeForkCluster(8)
+split(expr.data.plot, expr.data.plot$module.colors) %>% parLapply(cl = cluster, gen.heatmap, ME.genes.plot)
+
+modules.out <- select(gene.info, Symbol, module.color)
+write.xlsx(modules.out, "modules_out.xlsx")
+
+source("../../code/GO/enrichr.R")
+
+enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
+#enrichr.submit("blue", modules.out, enrichr.terms, FALSE)
+color.names <- unique(module.colors) %>% sort
+grey.location <- str_detect(color.names, "grey")
+color.names.reduce <- color.names[!grey.location]
+l_ply(color.names.reduce, enrichr.submit, modules.out, enrichr.terms, FALSE)
+
+modules.out.reduce <- filter(modules.out, module.color != "grey")
+modules.out.reduce$module.color %<>% droplevels
+
+split(modules.out.reduce, modules.out.reduce$module.color) %>% map(submit.stringdb)
+
+submit.stringdb <- function(module.subset)
+{
+    get.stringdb(module.subset, unique(module.subset$module.color), "./stringdb")
+}
+
+targets.final.gaa <- pData(lumi.cleaned)
+#targets.final.gaa$Sample.Name %<>% str_replace(" ", "")
 rownames(ME.genes) <- rownames(expr.data.PEER)
+PEER.factors <- read_csv("./factor_8.csv") %>% select(-(X1:X6)) 
 rownames(PEER.factors) <- rownames(expr.data.PEER)
 colnames(PEER.factors) <- paste("X", 1:ncol(PEER.factors), sep = "")
 
@@ -385,128 +458,45 @@ colnames(targets.sex.m) <- "Sex"
 targets.sex.m %<>% mutate(Sample.Name = targets.final.gaa$Sample.Name)
 cor.sex <- gen.cor(ME.genes, targets.sex.m)
 
-targets.gaa <- select(targets.final.gaa, Sample.Name, GAA1) %>% filter(!is.na(GAA1)) #%>% filter(!is.na(GAA2))
+targets.gaa <- select(targets.final.gaa, Sample.Name, GAA1) 
 cor.gaa <- gen.cor(ME.genes, targets.gaa)
 
-targets.onset <- select(targets.final.gaa, Sample.Name, Onset) %>% filter(!is.na(Onset))
+targets.final.gaa$Onset %<>% as.numeric
+targets.onset <- select(targets.final.gaa, Sample.Name, Onset) 
 cor.onset <- gen.cor(ME.genes, targets.onset)
 
-targets.diff <- select(targets.final.gaa, Sample.Name, Diff.Baseline)
-cor.diff <- gen.cor(ME.genes, targets.diff)
+targets.rin <- select(targets.final.gaa, Sample.Name, RIN)
+cor.rin <- gen.cor(ME.genes, targets.rin)
 
-PEER.factors.plot <- select(read_csv("./factor_10.csv"), -(X1:X7))
-names(PEER.factors.plot) <- paste("X", 1:ncol(PEER.factors.plot), sep = "")
-PEER.factors.df <- mutate(PEER.factors.plot, Sample.Name = targets.final.gaa$Sample.Name) 
+PEER.factors.df <- mutate(PEER.factors, Sample.Name = targets.final.gaa$Sample.Name) 
 cor.PEER <- gen.cor(ME.genes, PEER.factors.df) %>% data.frame
 
-module.traits.all <- cbind(cor.age, cor.sex, cor.gaa, cor.onset, cor.diff) %>% data.frame
-module.traits.pval <- select(module.traits.all, contains("p.value")) %>% as.matrix
+module.traits.all <- cbind(cor.age, cor.sex, cor.gaa, cor.onset, cor.rin) %>% data.frame
+module.traits.pval <- select(module.traits.all, contains("p.value")) %>% as.matrix %>% apply(2, p.adjust, "fdr")
 module.traits.cor <- select(module.traits.all, -contains("p.value")) %>% as.matrix
 
-#module.PEER.all <- cor.gaa.PEER %>% data.frame
-#module.PEER.pval <- select(module.PEER.all, contains("p.value")) %>% as.matrix
-#module.PEER.cor <- select(module.PEER.all, -contains("p.value")) %>% as.matrix
-
 cor.PEER.cor <- select(cor.PEER, -contains("p.value")) %>% as.matrix
-cor.PEER.pval <- select(cor.PEER, contains("p.value")) %>% as.matrix
+cor.PEER.pval <- select(cor.PEER, contains("p.value")) %>% as.matrix %>% apply(2, p.adjust, "fdr")
 
 module.trait.out <- data.frame(Module = rownames(module.traits.cor), module.traits.cor, module.traits.pval)
-#module.PEER.out <- data.frame(Factor = rownames(module.PEER.cor), module.PEER.cor, module.PEER.pval)
 cor.PEER.out <- data.frame(Module = rownames(cor.PEER), cor.PEER.cor, cor.PEER.pval)
 
 write_csv(module.trait.out, "module_trait_cor.csv")
-#write_csv(module.PEER.out, "module_PEER_cor.csv")
 write_csv(cor.PEER.out, "cor_PEER_cor.csv")
 
 text.matrix.traits <- paste(signif(module.traits.cor, 2), '\n(', signif(module.traits.pval, 1), ')', sep = '')
-#text.matrix.PEER <- paste(signif(module.PEER.cor, 2), '\n(', signif(module.PEER.pval, 1), ')', sep = '')
 text.matrix.PEERcor <- paste(signif(cor.PEER.cor, 2), '\n(', signif(cor.PEER.pval, 1), ')', sep = '')
 dim(text.matrix.traits) = dim(module.traits.cor)
-#dim(text.matrix.PEER) = dim(module.PEER.cor)
 dim(text.matrix.PEERcor) = dim(cor.PEER.cor)
 
 gen.text.heatmap(module.traits.cor, text.matrix.traits, colnames(module.traits.cor), colnames(ME.genes), "", "module-trait relationships")
-#gen.text.heatmap(module.PEER.cor, text.matrix.PEER, colnames(module.PEER.cor), rownames(module.PEER.cor), "", "PEER factor-trait relationships")
 gen.text.heatmap(cor.PEER.cor, text.matrix.PEERcor, colnames(cor.PEER.cor), colnames(ME.genes), "", "module-PEER factor relationships")
 
-cor.gaa.labeled <- data.frame(Color = rownames(cor.gaa), cor.gaa)
-gaa.sig <- filter(data.frame(cor.gaa.labeled), GAA1.p.value < 0.05)
-me.genes.gaa <- select(ME.genes, one_of(as.character(gaa.sig$Color)))
-me.genes.gaa$GAA <- targets.final.gaa$GAA1
-me.gaa.melt <- melt(me.genes.gaa, id.vars = "GAA")
-
-colnames(me.gaa.melt)[2] <- "Module"
-me.gaa.melt$Module %<>% as.character
-p <- ggplot(me.gaa.melt, aes(x = GAA, y = value, col = Module)) + geom_point()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(axis.ticks.x = element_blank()) + ylab("Eigengene")
-p <- p + theme(axis.title.x = element_blank()) + scale_x_continuous(as.numeric(unique(me.gaa.melt$GAA)))
-p <- p + scale_color_manual(values = sort(unique(me.gaa.melt$Module)))
-p <- p + facet_wrap(~ Module)
-p <- p + theme(legend.position = "none")
-
-CairoPDF("gaa_eigengenes_05", height = 13, width = 20)
-print(p)
-dev.off()
-
-cor.gaa.labeled <- data.frame(Color = rownames(cor.gaa), cor.gaa)
-gaa.sig <- filter(data.frame(cor.gaa.labeled), GAA1.p.value < 0.005)
-me.genes.gaa <- select(ME.genes, one_of(as.character(gaa.sig$Color)))
-me.genes.gaa$GAA <- targets.final.gaa$GAA1
-me.gaa.melt <- melt(me.genes.gaa, id.vars = "GAA")
-
-test.gaa <- select(me.genes.gaa, salmon, GAA)
-colnames(me.gaa.melt)[2] <- "Module"
-p <- ggplot(me.gaa.melt, aes(x = GAA, y = value, fill = Module, color = Module)) + geom_point()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(axis.ticks.x = element_blank()) + ylab("Eigengene")
-p <- p + theme(axis.title.x = element_blank()) + scale_x_continuous(as.numeric(unique(me.gaa.melt$GAA)))
-p <- p + scale_color_manual(values = sort(unique(me.gaa.melt$Module)))
-p <- p + facet_wrap(~ Module)
-p <- p + theme(legend.position = "none")
-
-CairoPDF("gaa_eigengenes_005", height = 13, width = 20)
-print(p)
-dev.off()
-
-cor.onset.labeled <- data.frame(Color = rownames(cor.onset), cor.onset)
-onset.sig <- filter(data.frame(cor.onset.labeled), Onset.p.value < 0.05)
-me.genes.onset <- select(ME.genes, one_of(as.character(onset.sig$Color)))
-me.genes.onset$Onset <- targets.final.gaa$Onset
-me.onset.melt <- melt(me.genes.onset, id.vars = "Onset")
-
-colnames(me.onset.melt)[2] <- "Module"
-me.onset.melt$Module %<>% as.character
-p <- ggplot(me.onset.melt, aes(x = as.numeric(Onset), y = value, col = Module)) + geom_point()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(axis.ticks.x = element_blank()) + ylab("Eigengene")
-p <- p + theme(axis.title.x = element_blank()) + scale_x_continuous(as.numeric(unique(me.onset.melt$Onset)))
-p <- p + scale_color_manual(values = sort(unique(me.onset.melt$Module)))
-p <- p + facet_wrap(~ Module)
-p <- p + theme(legend.position = "none")
-
-CairoPDF("onset_eigengenes_05", height = 13, width = 20)
-print(p)
-dev.off()
-
-cor.onset.labeled <- data.frame(Color = rownames(cor.onset), cor.onset)
-onset.sig <- filter(data.frame(cor.onset.labeled), Onset.p.value < 0.005)
-me.genes.onset <- select(ME.genes, one_of(as.character(onset.sig$Color)))
-me.genes.onset$Onset <- targets.final.gaa$Onset
-me.onset.melt <- melt(me.genes.onset, id.vars = "Onset")
-
-colnames(me.onset.melt)[2] <- "Module"
-p <- ggplot(me.onset.melt, aes(x = Onset, y = value, fill = Module, color = Module)) + geom_point()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(axis.ticks.x = element_blank()) + ylab("Eigengene")
-p <- p + theme(axis.title.x = element_blank()) + scale_x_continuous(as.numeric(unique(me.onset.melt$Onset)))
-p <- p + scale_color_manual(values = sort(unique(me.onset.melt$Module)))
-p <- p + facet_wrap(~ Module)
-p <- p + theme(legend.position = "none")
-
-CairoPDF("onset_eigengenes_005", height = 13, width = 20)
-print(p)
-dev.off()
+plot.eigencor(module.traits.pval, "GAA1", lumi.cleaned$GAA1)
+plot.eigencor(module.traits.pval, "Onset", lumi.cleaned$Onset)
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()
+unlist(test) %>% sort
+
+
