@@ -55,9 +55,8 @@ extract.ica <- function(index, dataset)
 
 gen.ica <- function(dataset)
 {
-    #factors <- names(dataset)
-    #ica.factors <- map(factors, extract.ica, dataset)
-    ica.subset <- apply((abs(dataset) > 3), 1, any)
+    dataset.abs <- abs(dataset) 
+    ica.subset <- apply((dataset > 3), 1, any)
     return(dataset[ica.subset,])
 }
 
