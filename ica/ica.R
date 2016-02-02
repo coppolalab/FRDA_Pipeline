@@ -179,6 +179,7 @@ l_ply(names(intensities.ica.genes.m), gen.icatables, intensities.ica.genes.m, "i
 
 source("../../code/GO/enrichr.R")
 enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
+cluster.parallel <- makeForkCluster()
 
 lapply(names(intensities.ica.genes), enrichr.ica, intensities.ica.genes, enrichr.terms, "intensities.median")
 lapply(names(intensities.ica.genes.m), enrichr.ica, intensities.ica.genes.m, enrichr.terms, "intensities.mean")
