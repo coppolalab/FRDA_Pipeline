@@ -56,21 +56,16 @@ extract.ica <- function(index, dataset)
 gen.ica <- function(dataset)
 {
     dataset.abs <- abs(dataset) 
-    ica.subset <- apply((dataset > 3), 1, any)
-    return(dataset[ica.subset,])
+    ica.subset <- apply((dataset.abs > 3), 1, any)
+    return(dataset.abs[ica.subset,])
 }
 
-slice.ica <- function(index, dataset)
+split.ica <- function(data.vector)
 {
-    return(slice(dataset, index))
-}
-
-subset.ica <- function(raw.data, ica.members)
-{
-    ica.genes <- lapply(ica.members, slice.ica, raw.data) 
-    #ica.joined <- lapply(ica.genes, merge, fdata, by.x = "Probe_Id", by.y = "nuID")
-    #ica.joined %<>% lapply(select, Probe_Id, Symbol, DEFINITION, ACCESSION, contains("X"))
-    return(list(ica.genes))
+    dataset <- data.frame(Symbol = names(data.vector), Module = data.vector)
+    dataset.split <- split(dataset, dataset$Module) 
+    names(dataset.split) <- paste("X", 1:length(dataset.split), sep = "")
+    return(dataset.split)
 }
 
 enrichr.ica <- function(status.index, data.raw, enrichr.terms, prefix)
@@ -158,36 +153,9 @@ gen.icatables <- function(index, dataset, prefix)
     l_ply(names(data.subset), ica.wkbk, data.subset, full.path)
 }
 
-intensities.medians <- readRDS.gz("../dtw/save/intensities.medians.rda")
-intensities.means <- readRDS.gz("../dtw/save/intensities.means.rda")
-#fdata <- readRDS.gz("../dtw/save/fdata.rda")
-#colnames(fdata)[2] <- "Symbol"
-
-intensities.ica <- map(intensities.medians, select, -Symbol) %>% map(fastICA, 4) %>% map(`[[`, "S") %>% map(data.frame) #%>% map(gen.ica)
-intensities.ica.m <- map(intensities.means, select, -Symbol) %>% map(fastICA, 4) %>% map(`[[`, "S") %>% map(data.frame) %>% map(gen.ica)
-
-intensities.ica.genes <- mapply(intensities.medians, intensities.ica, FUN = subset.ica)
-intensities.ica.genes.m <- mapply(intensities.means, intensities.ica, FUN = subset.ica)
-
-names(intensities.ica.genes) <- names(intensities.ica)
-names(intensities.ica.genes.m) <- names(intensities.ica.m)
-
-#l_ply(names(intensities.ica.genes), gen.icaplots, intensities.ica.genes)
-
-l_ply(names(intensities.ica.genes), gen.icatables, intensities.ica.genes, "ica.median")
-l_ply(names(intensities.ica.genes.m), gen.icatables, intensities.ica.genes.m, "ica.mean")
-
-source("../../code/GO/enrichr.R")
-enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
-cluster.parallel <- makeForkCluster()
-
-lapply(names(intensities.ica.genes), enrichr.ica, intensities.ica.genes, enrichr.terms, "intensities.median")
-lapply(names(intensities.ica.genes.m), enrichr.ica, intensities.ica.genes.m, enrichr.terms, "intensities.mean")
-
 stringdb.ica <- function(status.index, data.raw, prefix)
 {
     data.subset <- data.raw[[status.index]]
-    print(data.subset)
     full.path <- file.path("./stringdb", prefix, status.index)
     dir.create(full.path, showWarnings = FALSE, recursive = TRUE)
     names(data.subset) <- paste("X", 1:length(data.subset), sep = "")
@@ -197,11 +165,43 @@ stringdb.ica <- function(status.index, data.raw, prefix)
 stringdb.submit <- function(component, all.components, full.path)
 {
     dataset <- all.components[[component]]
-    print(dim(dataset))
-    get.stringdb(dataset, component, full.path)
+    get.stringdb(dataset, component, full.path, 400)
 }
-map(names(intensities.ica.genes.m), stringdb.ica, intensities.ica.genes.m, "means")
-map(names(intensities.ica.genes), stringdb.ica, intensities.ica.genes, "median")
 
+setnames <- function(dataset, symbols.vector)
+{
+    rownames(dataset) <- symbols.vector
+    return(dataset)
+}
+
+seed.ICA <- function(intensities, ica.list = list(), iter.count = 0)
+{
+   if (iter.count < 250) 
+   {
+        ica.new <- map(intensities, select, -Symbol) %>% map(fastICA, 4) %>% map(`[[`, "S") %>% map(data.frame) 
+        iter.count <- iter.count + 1
+        ica.list <- c(ica.list, ica.new)
+        seed.ICA(intensities, ica.list, iter.count)
+   }
+   else
+   {
+        return(ica.list)
+   }
+}
+
+ica.all <- seed.ICA
+intensities.means <- readRDS.gz("../dtw/save/intensities.means.rda")
+
+intensities.ica <- map(intensities.means, select, -Symbol) %>% map(fastICA, 4) %>% map(`[[`, "S") %>% map(data.frame) 
+intensities.ica %<>% map(setnames, intensities.means$Patient$Symbol) %>% map(gen.ica)
+
+intensities.ica.genes <- map(intensities.ica, apply, 1, which.max) %>% map(split.ica)
+
+#l_ply(names(intensities.ica.genes), gen.icatables, intensities.ica.genes, "ica.mean")
+
+source("../../code/GO/enrichr.R")
+enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
+
+map(names(intensities.ica.genes), enrichr.ica, intensities.ica.genes, enrichr.terms, "intensities.mean")
+map(names(intensities.ica.genes), stringdb.ica, intensities.ica.genes, "means")
 saveRDS.gz(intensities.ica.genes, "./save/intensities.ica.genes.rda")
-saveRDS.gz(intensities.ica.genes.m, "./save/intensities.ica.genes.m.rda")
