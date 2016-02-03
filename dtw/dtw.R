@@ -214,6 +214,7 @@ model.combat <- cbind(model.status.reduce, Male = model.sex.reduce, Age = as.num
 expr.combat <- ComBat(dat = exprs(lumi.rmreps.annot), batch = factor(lumi.rmreps.annot$Batch), mod = model.combat)
 lumi.combat <- lumi.rmreps.annot
 exprs(lumi.combat) <- expr.combat
+saveRDS.gz("./save/lumi.combat")
 
 source("../common_functions.R")
 

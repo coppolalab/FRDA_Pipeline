@@ -55,7 +55,8 @@ extract.ica <- function(index, dataset)
 
 gen.ica <- function(dataset)
 {
-    dataset.abs <- abs(dataset) 
+    rownames(dataset) <- dataset$Symbol
+    dataset.abs <- abs(select(dataset, -Symbol)) 
     ica.subset <- apply((dataset.abs > 3), 1, any)
     return(dataset.abs[ica.subset,])
 }
@@ -168,9 +169,9 @@ stringdb.submit <- function(component, all.components, full.path)
     get.stringdb(dataset, component, full.path, 400)
 }
 
-setnames <- function(dataset, symbols.vector)
+setnames <- function(dataset)
 {
-    rownames(dataset) <- symbols.vector
+    rownames(dataset) <- dataset$Symbol
     return(dataset)
 }
 
@@ -178,9 +179,10 @@ seed.ICA <- function(intensities, ica.list = list(), iter.count = 0)
 {
    if (iter.count < 250) 
    {
-        ica.new <- map(intensities, select, -Symbol) %>% map(fastICA, 4) %>% map(`[[`, "S") %>% map(data.frame) 
+        ica.new <- map(intensities, select, -Symbol) %>% map(fastICA, 4, "deflation") %>% map(`[[`, "S") %>% map(data.frame, Symbol = intensities[[1]]$Symbol) %>% map(setnames)
         iter.count <- iter.count + 1
         ica.list <- c(ica.list, ica.new)
+        print(iter.count)
         seed.ICA(intensities, ica.list, iter.count)
    }
    else
@@ -189,11 +191,28 @@ seed.ICA <- function(intensities, ica.list = list(), iter.count = 0)
    }
 }
 
-ica.all <- seed.ICA
+collapse.ica <- function(subset.key, ica.list)
+{
+    ica.subset <- ica.list[which(str_detect(names(ica.list), subset.key))]
+    ica.melt <- melt(ica.subset)
+    ica.cast <- dcast(ica.melt, Symbol ~ variable, Compose(abs, median)) #%>% select(-Symbol)
+    return(ica.cast)
+}
+
 intensities.means <- readRDS.gz("../dtw/save/intensities.means.rda")
 
-intensities.ica <- map(intensities.means, select, -Symbol) %>% map(fastICA, 4) %>% map(`[[`, "S") %>% map(data.frame) 
-intensities.ica %<>% map(setnames, intensities.means$Patient$Symbol) %>% map(gen.ica)
+ica.all <- seed.ICA(intensities.means)
+saveRDS.gz(ica.all, "./save/ica.all.rda")
+#ica.patient <- ica.all[str_detect(names(ica.all), "Patient")]
+#ica.melt <- melt(ica.patient)
+#ica.snca <- filter(ica.melt, Symbol == "MMP9")
+#snca.means <- by(ica.snca, factor(ica.snca$variable), select, value) %>% map(Compose(abs, median))
+
+ica.split <- map(unique(names(ica.all)), collapse.ica, ica.all)
+names(ica.split) <- unique(names(ica.all))
+
+#intensities.ica <- map(intensities.means, select, -Symbol) %>% map(fastICA, 4) %>% map(`[[`, "S") %>% map(data.frame) 
+intensities.ica <- map(ica.split, gen.ica)
 
 intensities.ica.genes <- map(intensities.ica, apply, 1, which.max) %>% map(split.ica)
 
