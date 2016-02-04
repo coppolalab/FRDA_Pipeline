@@ -820,7 +820,7 @@ get.cor <- function(dataset)
 gstm.cor <- by(gstm.noage.df, gstm.noage.df$Status, select, Age.Plot, Expression) %>% ldply(get.cor) 
 colnames(gstm.cor)[1] <- "Status"
 
-p <- ggplot(gstm.noage.df, aes(x = Age.Plot, y = Expression)) + geom_point() + facet_wrap(~ Status, ncol = 3) + geom_smooth(method = lm) 
+q <- ggplot(gstm.noage.df, aes(x = Age.Plot, y = Expression)) + geom_point() + facet_wrap(~ Status, ncol = 3) + geom_smooth(method = lm) 
 p <- p + xlab("Age (years)") + ylab("VST normalized Expression")
 CairoPDF("gstm_age", width = 18, height = 6)
 print(p)
