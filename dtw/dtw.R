@@ -193,6 +193,8 @@ remove.all <- remove.indices | reps.samples
 saveRDS.gz(remove.all, "./save/remove.all.rda")
 
 lumi.rmreps <- lumi.long[,!remove.all]
+lumi.baseline <- lumi.rmreps[,lumi.rmreps$Sample.Num == "1"]
+
 lumi.rmreps.norm <- lumiN(lumi.rmreps, method = "rsn") #Normalize with robust spline regression
 #lumi.rmreps.qual <- lumiQ(lumi.rmreps.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
 lumi.rmreps.cutoff <- detectionCall(lumi.rmreps.norm) #Get the count of probes which passed the detection threshold per sample
@@ -200,6 +202,7 @@ lumi.rmreps.expr <- lumi.rmreps.norm[which(lumi.rmreps.cutoff > 0),] #Drop any p
 symbols.lumi.rmreps <- getSYMBOL(rownames(lumi.rmreps.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
 lumi.rmreps.annot <- lumi.rmreps.expr[!symbols.lumi.rmreps,] #Drop any probe which is not annotated
 saveRDS.gz(lumi.rmreps.annot, file = "./save/lumi.rmreps.annot.rda")
+
 
 model.status <- model.matrix( ~ 0 + factor(lumi.rmreps.annot$Status) )
 colnames(model.status) <- c("Carrier", "Control", "Patient")
@@ -214,7 +217,7 @@ model.combat <- cbind(model.status.reduce, Male = model.sex.reduce, Age = as.num
 expr.combat <- ComBat(dat = exprs(lumi.rmreps.annot), batch = factor(lumi.rmreps.annot$Batch), mod = model.combat)
 lumi.combat <- lumi.rmreps.annot
 exprs(lumi.combat) <- expr.combat
-saveRDS.gz("./save/lumi.combat")
+saveRDS.gz(lumi.combat, "./save/lumi.combat")
 
 source("../common_functions.R")
 
@@ -240,7 +243,8 @@ gen.text.heatmap(PEER.traits.cor, text.matrix.PEER, colnames(PEER.traits.cor), r
 PEER.trait.out <- data.frame(Factor = rownames(PEER.traits.cor), PEER.traits.cor, PEER.traits.pval)
 write_csv(PEER.trait.out, "PEER_trait_cor.csv")
 
-PEER.weights.sums <- colSums(abs(model.PEER_covariate)) %>% data.frame
+PEER.weights <- read_csv("./weight_8.csv") %>% select(-(X1:X4))
+PEER.weights.sums <- colSums(abs(PEER.weights)) %>% data.frame
 PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums)
 colnames(PEER.weights.sums)[1] <- "Weight"
 
