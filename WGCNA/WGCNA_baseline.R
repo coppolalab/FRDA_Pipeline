@@ -13,7 +13,7 @@ library(Biobase)
 library(magrittr)
 library(purrr)
 library(functional)
-library(lambda.r)
+library(vadr)
 
 #Data arrangement
 library(reshape2)
@@ -28,6 +28,8 @@ library(stringr)
 library(ggplot2)
 library(extrafont)
 library(Cairo)
+library(igraph)
+library(TeachingDemos)
 
 #Reading and writing tables
 library(readr)
@@ -214,7 +216,7 @@ dynamic.colors <- labels2colors(dynamic.modules)
 saveRDS.gz(dynamic.colors, file = "./save/dynamic.colors.rda")
 
 CairoPDF(file = "./gene_dendrogram_and_module_colors_min50", height = 10, width = 15)
-plotDendroAndColors(geneTree, dynamic.colors, "Dynamic Tree Cut", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05)
+plotDendroAndColors(geneTree, dynamic.colors, "", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "")
 dev.off()
 
 #Calculate module eigengenes
@@ -280,7 +282,6 @@ module.membership.pvalue.long <- gather_(data = module.membership.pvalue, "modul
 membership.join <- join(gene.module.membership.long, module.membership.pvalue.long)
 eigengene.connectivity <- join(membership.join, gene.info) %>% select(Symbol, module.color:kscaled, module.comparison:p.value)
 write_csv(eigengene.connectivity, "eigengene_connectivity.csv")
-
 all.smooth <- apply(ME.genes, 2, smooth.spline, spar = 0.4) %>% llply(`[`, "y")
 smooth.df <- data.frame(all.smooth)
 colnames(smooth.df) <- names(all.smooth)
@@ -410,3 +411,126 @@ plot.eigencor(module.traits.pval, "Carrier.Patient", lumi.import$Status)
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()
 unlist(test) %>% sort
+
+#Final plots
+lightgreenyellow.biol <- read.xlsx("./enrichr/lightgreen/lightgreen_GO_Biological_Process.xlsx") %>% slice(c(1,2))
+lightgreen.biol$Database <- "GO Biological Process"
+lightgreen.kegg <- read.xlsx("./enrichr/lightgreen/lightgreen_KEGG_2015.xlsx") %>% slice(c(1,3))
+lightgreen.kegg$Database <- "KEGG"
+lightgreen.reactome <- read.xlsx("./enrichr/lightgreen/lightgreen_Reactome_2015.xlsx") %>% slice(1)
+lightgreen.reactome$Database <- "Reactome"
+lightgreen.enrichr <- rbind(lightgreen.biol, lightgreen.kegg, lightgreen.reactome)
+lightgreen.enrichr$Gene.Count <- map(lightgreen.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+lightgreen.enrichr$Log.pvalue <- -(log10(lightgreen.enrichr$P.value))
+
+lightgreen.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+lightgreen.enrichr$Format.Name <- paste(lightgreen.enrichr$Database, ": ", lightgreen.enrichr$GO.Term, " (", lightgreen.enrichr$Gene.Count, ")", sep = "")
+lightgreen.enrichr.plot <- select(lightgreen.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(lightgreen.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = lightgreen.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("lightgreen.enrichr", height = 5, width = 8)
+print(p)
+dev.off()
+
+greenyellow.molec <- read.xlsx("./enrichr/greenyellow/greenyellow_GO_Molecular_Function.xlsx") %>% slice(c(1,2))
+greenyellow.molec$Database <- "GO Molecular Function"
+greenyellow.kegg <- read.xlsx("./enrichr/greenyellow/greenyellow_KEGG_2015.xlsx") %>% slice(c(1,3,6))
+greenyellow.kegg$Database <- "KEGG"
+greenyellow.reactome <- read.xlsx("./enrichr/greenyellow/greenyellow_Reactome_2015.xlsx") %>% slice(c(1,36,38,39))
+greenyellow.reactome$Database <- "Reactome"
+greenyellow.enrichr <- rbind(greenyellow.molec, greenyellow.kegg, greenyellow.reactome)
+greenyellow.enrichr$Gene.Count <- map(greenyellow.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+greenyellow.enrichr$Log.pvalue <- -(log10(greenyellow.enrichr$P.value))
+
+greenyellow.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+greenyellow.enrichr$Format.Name <- paste(greenyellow.enrichr$Database, ": ", greenyellow.enrichr$GO.Term, " (", greenyellow.enrichr$Gene.Count, ")", sep = "")
+greenyellow.enrichr.plot <- select(greenyellow.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(greenyellow.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = greenyellow.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("greenyellow.enrichr", height = 5, width = 9)
+print(p)
+dev.off()
+
+lightgreen.eigen <- data.frame(Eigengene = ME.genes$lightgreen, Status = lumi.import$Status) %>% filter(Status != "Carrier")
+p <- ggplot(lightgreen.eigen, aes(x = Status, y = Eigengene)) + geom_point(position = "jitter", col = "lightgreen")
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p <- p + theme(axis.ticks.x = element_blank()) + ylab("Eigengene")
+p <- p + theme(axis.title.x = element_blank()) + stat_summary(aes(group = 1), fun.y = mean, geom = "line", col = "black", position = position_dodge(width = 0.9))
+p <- p + theme(legend.position = "none")
+
+CairoPDF("lightgreen.eigengene", height = 5, width = 7)
+print(p)
+dev.off()
+
+greenyellow.eigen <- data.frame(Eigengene = ME.genes$greenyellow, Status = lumi.import$Status) %>% filter(Status != "Carrier")
+p <- ggplot(greenyellow.eigen, aes(x = Status, y = Eigengene)) + geom_point(position = "jitter", col = "greenyellow")
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p <- p + theme(axis.ticks.x = element_blank()) + ylab("Eigengene")
+p <- p + theme(axis.title.x = element_blank()) + stat_summary(aes(group = 1), fun.y = mean, geom = "line", col = "black", position = position_dodge(width = 0.9))
+p <- p + theme(legend.position = "none")
+
+CairoPDF("greenyellow.eigengene", height = 5, width = 7)
+print(p)
+dev.off()
+
+#get.stringdb(data.frame(Symbol = str_split(lightgreen.biol$Genes[2], ",")[[1]]), "lightgreen_celldeath")
+
+match.exact <- paste %<<<% "^" %<<% c("$", sep = "")
+pcd.members <- str_split(lightgreen.biol$Genes[2], ",")[[1]] %>% map_chr(match.exact) %>% paste(collapse = "|")
+adjacency.pcd <- adjacency.PEER[grepl(pcd.members, rownames(adjacency.PEER)), grepl(pcd.members, colnames(adjacency.PEER))]
+pcd.igraph <- graph_from_adjacency_matrix(adjacency.pcd, mode = "undirected", weighted = TRUE, diag = FALSE)
+
+pcd.colors <- rainbow(vcount(pcd.igraph))
+V(pcd.igraph)$color <- pcd.colors
+edge.df <- data.frame(edge_attr(pcd.igraph))
+#edge.thickness <- edge.df$combined_score / 20
+pcd.nchars <- vertex_attr(pcd.igraph, "name") %>% map_int(nchar)
+dist.pcd <- .14 / (max(pcd.nchars) - min(pcd.nchars))
+pcd.dists <- ((max(pcd.nchars) - pcd.nchars)^1.3 * dist.pcd) + 0.76
+
+CairoPDF("pcd_igraph.pdf", width = 6, height = 6)
+par(mar=c(0,0,0,0) + 0.1)
+plot.igraph(pcd.igraph, vertex.size = 20, vertex.label.dist = pcd.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = "#dddddd99")
+dev.off()
+
+oxo.members <- str_split(greenyellow.molec$Genes[1], ",")[[1]] %>% map_chr(match.exact) %>% paste(collapse = "|")
+adjacency.oxo <- adjacency.PEER[grepl(oxo.members, rownames(adjacency.PEER)), grepl(oxo.members, colnames(adjacency.PEER))]
+oxo.igraph <- graph_from_adjacency_matrix(adjacency.oxo, mode = "undirected", weighted = TRUE, diag = FALSE)
+
+oxo.colors <- rainbow(vcount(oxo.igraph))
+V(oxo.igraph)$color <- oxo.colors
+edge.df <- data.frame(edge_attr(oxo.igraph))
+#edge.thickness <- edge.df$combined_score / 20
+oxo.nchars <- vertex_attr(oxo.igraph, "name") %>% map_int(nchar)
+dist.oxo <- .14 / (max(oxo.nchars) - min(oxo.nchars))
+oxo.dists <- ((max(oxo.nchars) - oxo.nchars)^1.3 * dist.oxo) + 0.76
+
+CairoPDF("oxo_igraph.pdf", width = 6, height = 6)
+par(mar=c(0,0,0,0) + 0.1)
+plot.igraph(oxo.igraph, vertex.size = 20, vertex.label.dist = oxo.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = "#dddddd99")
+dev.off()
+
+#expr.green <- filter(expr.data.plot, module.colors == "lightgreen") %>% select(-module.colors) %>% scale
+#par(mar = c(3.5,3,2,3))
+#par(oma = c(4,0,2,0))
+#plotMat(expr.green, zlim = c(-max(abs(expr.green)), max(abs(expr.green))))
+
+ME.lightgreen.plot <- data.frame(Sample.ID = rownames(ME.genes), select(ME.genes, lightgreen), Status = lumi.import$Status) %>% filter(Status != "Carrier") %>% arrange(Status, Sample.ID)
+ME.lightgreen.plot$Sample.ID <- factor(ME.lightgreen.plot$Sample.ID, levels = ME.lightgreen.plot$Sample.ID)
+p <- ggplot(ME.lightgreen.plot, aes(x = Sample.ID, y = lightgreen)) + geom_bar(stat = "identity", aes(fill = Status))
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.y = element_blank())
+p <- p + theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.ticks.x = element_blank())
+CairoPDF("lightgreen_pco", width = 8, height = 5)
+print(p)
+dev.off()
+
+ME.greenyellow.plot <- data.frame(Sample.ID = rownames(ME.genes), select(ME.genes, greenyellow), Status = lumi.import$Status) %>% filter(Status != "Carrier") %>% arrange(Status, Sample.ID)
+ME.greenyellow.plot$Sample.ID <- factor(ME.greenyellow.plot$Sample.ID, levels = ME.greenyellow.plot$Sample.ID)
+p <- ggplot(ME.greenyellow.plot, aes(x = Sample.ID, y = greenyellow)) + geom_bar(stat = "identity", aes(fill = Status))
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.y = element_blank())
+p <- p + theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.ticks.x = element_blank())
+CairoPDF("greenyellow_pco", width = 8, height = 5)
+print(p)
+dev.off()

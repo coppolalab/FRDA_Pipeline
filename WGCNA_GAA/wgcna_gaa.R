@@ -15,7 +15,7 @@ library(R.utils)
 library(magrittr)
 library(purrr)
 library(functional)
-library(lambda.r)
+library(vadr)
 
 #Data arrangement
 library(reshape2)
@@ -30,6 +30,8 @@ library(stringr)
 library(ggplot2)
 library(extrafont)
 library(Cairo)
+library(igraph)
+library(TeachingDemos)
 
 #Reading and writing tables
 library(readr)
@@ -270,6 +272,42 @@ CairoPDF("gstm_gaa", width = 7, height = 5)
 print(p)
 dev.off()
 
+UBE2D3.cor <- filter(cor.df, Symbol == "UBE2D3")
+UBE2D3.df <- data.frame(Expression = expr.collapse["UBE2D3",], GAA = pdata$GAA1)
+p <- ggplot(UBE2D3.df, aes(x = GAA, y = Expression)) + geom_point() + geom_smooth(method = lm) 
+p <- p + xlab("GAA1 (# of GAA repeats)") + ylab("VST normalized Expression") 
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(colour = "black", size = 2))
+CairoPDF("UBE2D3_gaa", width = 7, height = 5)
+print(p)
+dev.off()
+
+FAIM3.cor <- filter(cor.df, Symbol == "FAIM3")
+FAIM3.df <- data.frame(Expression = expr.collapse["FAIM3",], GAA = pdata$GAA1)
+p <- ggplot(FAIM3.df, aes(x = GAA, y = Expression)) + geom_point() + geom_smooth(method = lm) 
+p <- p + xlab("GAA1 (# of GAA repeats)") + ylab("VST normalized Expression") 
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(colour = "black", size = 2))
+CairoPDF("FAIM3_gaa", width = 7, height = 5)
+print(p)
+dev.off()
+
+PPM1A.cor <- filter(cor.df, Symbol == "PPM1A")
+PPM1A.df <- data.frame(Expression = expr.collapse["PPM1A",], GAA = pdata$GAA1)
+p <- ggplot(PPM1A.df, aes(x = GAA, y = Expression)) + geom_point() + geom_smooth(method = lm) 
+p <- p + xlab("GAA1 (# of GAA repeats)") + ylab("VST normalized Expression") 
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(colour = "black", size = 2))
+CairoPDF("PPM1A_gaa", width = 7, height = 5)
+print(p)
+dev.off()
+
+RPS5.cor <- filter(cor.df, Symbol == "RPS5")
+RPS5.df <- data.frame(Expression = expr.collapse["RPS5",], GAA = pdata$GAA1)
+p <- ggplot(RPS5.df, aes(x = GAA, y = Expression)) + geom_point() + geom_smooth(method = lm) 
+p <- p + xlab("GAA1 (# of GAA repeats)") + ylab("VST normalized Expression") 
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(colour = "black", size = 2)) 
+CairoPDF("RPS5_gaa", width = 7, height = 5)
+print(p)
+dev.off()
+
 #Correlations
 gaa.cor <- apply(expr.collapse, 1, cor, lumi.cleaned$GAA1)
 gaa.cor.pval <- corPvalueStudent(gaa.cor, length(lumi.cleaned$GAA1)) %>% p.adjust("fdr")
@@ -281,6 +319,46 @@ cor.df$Symbol <- rownames(expr.collapse)
 cor.df %<>% arrange(P.value)
 cor.df.sg <- filter(cor.df, P.value < 0.05)
 write.xlsx(cor.df.sg, "significant_gaa.xlsx")
+
+source("../../code/GO/enrichr.R")
+enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
+cor.enrichr <- map(enrichr.terms, get.enrichrdata, cor.df.sg, FALSE)
+names(cor.enrichr) <- enrichr.terms
+map(names(cor.enrichr), enrichr.wkbk, cor.enrichr, "gaa_cor")
+
+get.updown <- function(filter.vector, enrichr.df)
+{
+    grep.vector <- str_replace_all(filter.vector, ",", "|")
+    enrichr.filter <- filter(enrichr.df, grepl(grep.vector, Symbol))
+    num.up <- which(enrichr.filter$Correlation > 0) %>% length
+    num.down <- which(enrichr.filter$Correlation < 0) %>% length
+    return(c("Up" = num.up, "Down" = num.down))
+}
+
+gaa.gobiol <- read.xlsx("./enrichr/gaa_cor/gaa_cor_GO_Biological_Process.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(c(1, 8, 9, 18))
+gaa.gobiol$Database <- "GO Biological Process"
+gaa.gomole <- read.xlsx("./enrichr/gaa_cor/gaa_cor_GO_Molecular_Function.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(c(1, 8))
+gaa.gomole$Database <- "GO Molecular Process"
+gaa.reactome <- read.xlsx("./enrichr/gaa_cor/gaa_cor_Reactome_2015.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(c(23, 25, 34))
+gaa.reactome$Database <- "Reactome"
+gaa.enrichr <- rbind(gaa.gobiol, gaa.gomole, gaa.reactome)
+gaa.enrichr$Gene.Count <- map(gaa.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+gaa.enrichr$Log.pvalue <- -(log10(gaa.enrichr$P.value))
+
+gaa.updown <- map(gaa.enrichr$Genes, get.updown, cor.df.sg) %>% reduce(rbind)
+#colnames(gaa.updown) <- c("Up", "Down")
+gaa.enrichr <- cbind(gaa.enrichr, gaa.updown)
+gaa.enrichr$Log.Up <- gaa.enrichr$Log.pvalue * gaa.enrichr$Up / gaa.enrichr$Gene.Count
+gaa.enrichr$Log.Down <- gaa.enrichr$Log.pvalue * gaa.enrichr$Down / gaa.enrichr$Gene.Count
+gaa.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+gaa.enrichr$Format.Name <- paste(gaa.enrichr$Database, ": ", gaa.enrichr$GO.Term, " (", gaa.enrichr$Gene.Count, ")", sep = "")
+gaa.enrichr.plot <- select(gaa.enrichr, Format.Name, Log.Up, Log.Down) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(gaa.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = c(gaa.enrichr$Format.Name, rep("", length(gaa.enrichr$Format.Name))), hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("gaa.enrichr", height = 5, width = 8)
+print(p)
+dev.off()
 
 #cor.probes <- c("ILMN_1726589", "ILMN_1659688", "ILMN_1703524", "ILMN_1765796", "ILMN_2184373", "ILMN_1745172", "ILMN_1747344") %>% paste(collapse = "|")
 #intensities1.cor <- data.frame(Probe_Id = rownames(intensities1.gaa), intensities1.gaa) %>% filter(grepl(cor.probes, Probe_Id))
@@ -337,7 +415,7 @@ dynamic.colors <- labels2colors(dynamic.modules)
 saveRDS.gz(dynamic.colors, file = "./save/dynamic.colors.rda")
 
 CairoPDF(file = "./gene_dendrogram_and_module_colors_min50", height = 10, width = 15)
-plotDendroAndColors(geneTree, dynamic.colors, "Dynamic Tree Cut", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05)
+plotDendroAndColors(geneTree, dynamic.colors, "", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "")
 dev.off()
 
 #Calculate module eigengenes
@@ -370,7 +448,7 @@ saveRDS.gz(modules.labels, file = "./save/modules.labels.rda")
 ME.genes <- merged.genes
 saveRDS.gz(ME.genes, file = "./save/me.genes.rda")
 
-CairoPDF("eigengenes", height = 10, width = 18)
+CairoPDF("eigengenes", height = 6, width = 10)
 par(cex = 0.7)
 plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
 dev.off()
@@ -422,9 +500,6 @@ split(expr.data.plot, expr.data.plot$module.colors) %>% parLapply(cl = cluster, 
 modules.out <- select(gene.info, Symbol, module.color)
 write.xlsx(modules.out, "modules_out.xlsx")
 
-source("../../code/GO/enrichr.R")
-
-enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
 #enrichr.submit("blue", modules.out, enrichr.terms, FALSE)
 color.names <- unique(module.colors) %>% sort
 grey.location <- str_detect(color.names, "grey")
@@ -440,6 +515,8 @@ submit.stringdb <- function(module.subset)
 {
     get.stringdb(module.subset, unique(module.subset$module.color), "./stringdb")
 }
+
+connectivity.reduce <- filter(eigengene.connectivity, module.color != "grey" & module.comparison != "grey" & module.color == module.comparison)
 
 targets.final.gaa <- pData(lumi.cleaned)
 #targets.final.gaa$Sample.Name %<>% str_replace(" ", "")
@@ -499,4 +576,32 @@ test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'aut
 names(test) <- ls()
 unlist(test) %>% sort
 
+#Green plots
+match.exact <- paste %<<<% "^" %<<% c("$", sep = "")
+green.members <- filter(modules.out, module.color == "green")$Symbol %>% map_chr(match.exact) %>% paste(collapse = "|")
+adjacency.green <- adjacency.PEER[grepl(green.members, rownames(adjacency.PEER)), grepl(green.members, colnames(adjacency.PEER))]
+green.igraph <- graph_from_adjacency_matrix(adjacency.green, mode = "undirected", weighted = TRUE, diag = FALSE)
 
+vertex.colors <- rainbow(vcount(green.igraph))
+V(green.igraph)$color <- vertex.colors
+edge.df <- data.frame(edge_attr(green.igraph))
+#edge.thickness <- edge.df$combined_score / 20
+igraph.nchars <- vertex_attr(green.igraph, "name") %>% map_int(nchar)
+dist.increment <- .14 / (max(igraph.nchars) - min(igraph.nchars))
+igraph.dists <- ((max(igraph.nchars) - igraph.nchars)^1.3 * dist.increment) + 0.26
+
+CairoPDF("green_igraph.pdf", width = 10, height = 10)
+par(mar=c(0,0,0,0) + .1)
+plot.igraph(green.igraph, vertex.size = 6, vertex.label.dist = igraph.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", margin = 0, edge.color = "#dddddd99")
+dev.off()
+
+gaa.green <- data.frame(Eigengene = ME.genes$green, GAA1 = lumi.cleaned$GAA1)
+p <- ggplot(gaa.green, aes(x = GAA1, y = Eigengene)) + geom_point(position = "jitter", col = "green")
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p <- p + theme(axis.ticks.x = element_blank()) + ylab("Eigengene") + stat_smooth(method = "lm")
+p <- p + theme(axis.title.x = element_blank()) + scale_x_continuous(as.numeric(unique(lumi.cleaned$GAA1)))
+p <- p + theme(legend.position = "none")
+
+CairoPDF("green_eigengene", height = 5, width = 7)
+print(p)
+dev.off()

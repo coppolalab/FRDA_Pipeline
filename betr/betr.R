@@ -269,7 +269,7 @@ cc.out <- betr(lumi.cc, cond = cc.condgrp, timepoint = cc.timegrp, replicate = c
 saveRDS.gz(cc.out, "./save/cc.out.rda")
 
 cc.genes <- data.frame(Symbol = names(cc.out), Probability = cc.out) %>% arrange(desc(Probability))
-write.xlsx(cc.genes, "./cc.out.xlsx")
+write.xlsx(cc.genes[1:500,], "./cc.out.xlsx")
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()

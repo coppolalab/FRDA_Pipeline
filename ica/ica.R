@@ -7,6 +7,7 @@ library(openxlsx)
 
 #For plotting
 library(ggplot2)
+library(Cairo)
 
 #For microarray stuff
 library(Biobase)
@@ -224,3 +225,39 @@ enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_20
 map(names(intensities.ica.genes), enrichr.ica, intensities.ica.genes, enrichr.terms, "intensities.mean")
 map(names(intensities.ica.genes), stringdb.ica, intensities.ica.genes, "means")
 saveRDS.gz(intensities.ica.genes, "./save/intensities.ica.genes.rda")
+
+#X1 GO
+X1.biol <- read.xlsx("./enrichr/intensities.mean/Patient/X1/GO_Biological_Process.xlsx") %>% slice(2)
+X1.biol$Database <- "GO Biological Process"
+X1.reactome <- read.xlsx("./enrichr/intensities.mean/Patient/X1/Reactome_2015.xlsx") %>% slice(c(21,27))
+X1.reactome$Database <- "Reactome"
+X1.enrichr <- rbind(X1.biol, X1.reactome)
+X1.enrichr$Gene.Count <- map(X1.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+X1.enrichr$Log.pvalue <- -(log10(X1.enrichr$P.value))
+
+X1.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+X1.enrichr$Format.Name <- paste(X1.enrichr$Database, ": ", X1.enrichr$GO.Term, " (", X1.enrichr$Gene.Count, ")", sep = "")
+X1.enrichr.plot <- select(X1.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(X1.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = X1.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("X1.enrichr", height = 5, width = 8)
+print(p)
+dev.off()
+
+#X4 GO
+X4.reactome <- read.xlsx("./enrichr/intensities.mean/Patient/X4/Reactome_2015.xlsx") %>% slice(c(5,42,43))
+X4.reactome$Database <- "Reactome"
+X4.enrichr <- X4.reactome
+X4.enrichr$Gene.Count <- map(X4.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+X4.enrichr$Log.pvalue <- -(log10(X4.enrichr$P.value))
+
+X4.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+X4.enrichr$Format.Name <- paste(X4.enrichr$Database, ": ", X4.enrichr$GO.Term, " (", X4.enrichr$Gene.Count, ")", sep = "")
+X4.enrichr.plot <- select(X4.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(X4.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = X4.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("X4.enrichr", height = 5, width = 8)
+print(p)
+dev.off()

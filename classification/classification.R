@@ -5,6 +5,7 @@ library(stringr)
 library(ggplot2)
 library(extrafont)
 library(Cairo)
+library(igraph)
 
 #Reading and writing tables
 library(readr)
@@ -526,3 +527,58 @@ dev.off()
 objects.size <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(objects.size) <- ls()
 unlist(objects.size) %>% sort
+
+#GO plots
+pca.molec <- read.xlsx("./enrichr/pca/GO_Molecular_Function.xlsx") %>% slice(c(1,2,3))
+pca.molec$Database <- "GO Molecular Function"
+pca.panther <- read.xlsx("./enrichr/pca/Panther.xlsx") %>% slice(1)
+pca.panther$Database <- "Panther"
+pca.reactome <- read.xlsx("./enrichr/pca/Reactome_2015.xlsx") %>% slice(2)
+pca.reactome$Database <- "Reactome"
+pca.enrichr <- rbind(pca.molec, pca.panther, pca.reactome)
+pca.enrichr$Gene.Count <- map(pca.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+pca.enrichr$Log.pvalue <- -(log10(pca.enrichr$P.value))
+
+pca.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+pca.enrichr$Format.Name <- paste(pca.enrichr$Database, ": ", pca.enrichr$GO.Term, " (", pca.enrichr$Gene.Count, ")", sep = "")
+pca.enrichr.plot <- select(pca.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(pca.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = pca.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("pca.enrichr", height = 5, width = 9)
+print(p)
+dev.off()
+
+pco.biol <- read.xlsx("./enrichr/pco/GO_Biological_Process.xlsx") %>% slice(c(1,2))
+pco.biol$Database <- "GO Biological Process"
+pco.enrichr <- pco.biol
+pco.enrichr$Gene.Count <- map(pco.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+pco.enrichr$Log.pvalue <- -(log10(pco.enrichr$P.value))
+
+pco.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+pco.enrichr$Format.Name <- paste(pco.enrichr$Database, ": ", pco.enrichr$GO.Term, " (", pco.enrichr$Gene.Count, ")", sep = "")
+pco.enrichr.plot <- select(pco.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(pco.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = pco.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("pco.enrichr", height = 5, width = 9)
+print(p)
+dev.off()
+
+cc.biol <- read.xlsx("./enrichr/cc/GO_Biological_Process.xlsx") %>% slice(2)
+cc.biol$Database <- "GO Biological Process"
+cc.molec <- read.xlsx("./enrichr/cc/GO_Molecular_Function.xlsx") %>% slice(1)
+cc.molec$Database <- "GO Molecular Function"
+cc.enrichr <- rbind(cc.biol, cc.molec)
+cc.enrichr$Gene.Count <- map(cc.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+cc.enrichr$Log.pvalue <- -(log10(cc.enrichr$P.value))
+
+cc.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+cc.enrichr$Format.Name <- paste(cc.enrichr$Database, ": ", cc.enrichr$GO.Term, " (", cc.enrichr$Gene.Count, ")", sep = "")
+cc.enrichr.plot <- select(cc.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(cc.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = cc.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("cc.enrichr", height = 5, width = 9)
+print(p)
+dev.off()

@@ -179,7 +179,7 @@ gen.decide <- function(test, fit.object, write.results)
 }
 
 #Plot statistical cutoff tests
-gen.decideplot <- function(filename, decide.plot)
+gen.decideplot <- function(filename, decide.plot, width.plot = 6, height.plot = 7)
 {
     decide.plot$variable <- str_replace_all(decide.plot$variable, "_", " ")
     p <- ggplot()
@@ -192,13 +192,13 @@ gen.decideplot <- function(filename, decide.plot)
         p <- p + facet_grid(Num + Test ~ .) 
         #p <- p + ggtitle("Threshold Selection")
     }
-    else
-    {
-        p <- p + ggtitle(paste(decide.plot$Test, "\n", decide.plot$Num))
-    }
+    #else
+    #{
+        #p <- p + ggtitle(paste(decide.plot$Test, "\n", decide.plot$Num))
+    #}
     p <- p + theme_bw() + coord_flip() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
-    p <- p + theme(axis.title.y = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_text(hjust = 0)) + ylab("Differentially Expressed Genes")
-    CairoPDF(filename, width = 6, height = 7)
+    p <- p + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_text(hjust = 0))# + ylab("Differentially Expressed Genes")
+    CairoPDF(filename, width = width.plot, height = height.plot)
     print(p)
     dev.off()
 }
@@ -407,35 +407,27 @@ gen.anova <- function(dataset, suffix)
 #Generate anova heatmaps
 gen.anova.heatmap <- function(filename, dataset, maintitle)
 { 
-    CairoPDF(filename, width = 10, height = 10)
-    heatmap.2(as.matrix(dataset), col = rev(redgreen(48)), breaks=(c(-3, -2.5, -2, -1.5, seq(-1, 1, 0.05), 1.5, 2, 2.5, 3)), trace = "none", cexCol = 0.3, labRow = "", keysize = 0.9)
+    CairoPDF(filename, width = 28, height = 10)
+    heatmap.2(as.matrix(dataset), col = rev(redgreen(48)), breaks=(c(-3, -2.5, -2, -1.5, seq(-1, 1, 0.05), 1.5, 2, 2.5, 3)), trace = "none", cexCol = 0.3, labRow = "", labCol = "", keysize = 0.9)
     dev.off()
 }
 
 #GO functions
 enrichr.submit <- function(colname, dataset, enrichr.terms, subdir)
 {
-    comparison.up <- paste(colname, '==', '1')
-    dataset.up <- filter_(dataset, comparison.up)
+    filter.cond <- paste(paste(colname, '==', '1'), paste(colname, "==", '-1'), sep = "|")
+    dataset.submit <- filter_(dataset, filter.cond)
+    #write.xlsx(dataset.down, file.path("./enrichr", subdir, paste(colname.formatted, "down.xlsx", sep = "_")))
+
     dir.create(file.path("./enrichr", subdir), showWarnings = FALSE)
     colname.formatted <- str_replace_all(colname, "time1\\.", "") %>% str_replace("Res\\.", "")
-    write.xlsx(dataset.up, file.path("./enrichr", subdir, paste(colname.formatted, "up.xlsx", sep = "_")))
-    comparison.down <- paste(colname, '==', '-1')
-    dataset.down <- filter_(dataset, comparison.down)
-    write.xlsx(dataset.down, file.path("./enrichr", subdir, paste(colname.formatted, "down.xlsx", sep = "_")))
+    enrichr.data <- map(enrichr.terms, get.enrichrdata, dataset.submit, FALSE)
+    enrichr.names <- enrichr.terms[!is.na(enrichr.data)]
+    enrichr.data <- enrichr.data[!is.na(enrichr.data)]
 
-    up.data <- lapply(enrichr.terms, get.enrichrdata, dataset.up, FALSE)
-    down.data <- lapply(enrichr.terms, get.enrichrdata, dataset.down, FALSE)
-    up.names <- enrichr.terms[!is.na(up.data)]
-    up.data <- up.data[!is.na(up.data)]
-    down.names <- enrichr.terms[!is.na(down.data)]
-    down.data <- down.data[!is.na(down.data)]
+    names(enrichr.data) <- enrichr.names
 
-    names(up.data) <- up.names
-    names(down.data) <- down.names
-
-    lapply(names(up.data), enrichr.wkbk, up.data, colname, subdir, "up")
-    lapply(names(down.data), enrichr.wkbk, down.data, colname, subdir, "down")
+    map(names(enrichr.data), enrichr.wkbk, enrichr.data, colname, subdir, "enrichr")
 }
 
 enrichr.wkbk <- function(database, full.df, colname, subdir, direction)
@@ -499,7 +491,7 @@ targets.final %<>% filter(!grepl(bad.slides, sampleID))
 #Note: Probe profiles in .csv format need to be converted to .tsv files because lumi produces errors when reading .csvs
 #Drop probes not found in all batches
 filenames <- list.files("../raw_data/", pattern = "*.txt|*.tsv", full.names = TRUE) #Get list of batch files
-intensities.list <- lapply(filenames, read_tsv) #Read files in to a list
+intensities.list <- map(filenames, read_tsv) #Read files in to a list
 intensities.mat <- reduce(intensities.list, merge) #Merge all of the batches into one table
 write.table(intensities.mat, "../raw_data/all_batches.tsv", sep = "\t", row.names = FALSE) #Save table to disk
 
@@ -752,7 +744,7 @@ decide.final <- gen.decide(c("none", 0.001), fit.object, TRUE) %>% melt(id.vars 
 gen.decideplot("./selected_threshold", decide.final)
 
 decide.final.fdr <- gen.decide(c("fdr", 0.1), fit.object, TRUE) %>% melt(id.vars = c("Test", "Num", "Direction"))
-gen.decideplot("./selected_threshold_fdr", decide.final.fdr)
+gen.decideplot("./selected_threshold_fdr", decide.final.fdr, 3, 4)
 
 #Make tables
 de.object <- read_tsv("./fit_none.tsv")
@@ -780,15 +772,15 @@ names(objects.size) <- ls()
 unlist(objects.size) %>% sort
 
 #Submit genes to Enrichr
-source('../GO/enrichr.R')
+source('../../code/GO/enrichr.R')
 enrichr.nofdr <- select(fit.selection, Symbol, Res.time1.carrier_vs_time1.control, Res.time1.patient_vs_time1.control, Res.time1.patient_vs_time1.carrier)
 enrichr.fdr <- select(fit.selection.fdr, Symbol, Res.time1.carrier_vs_time1.control, Res.time1.patient_vs_time1.control, Res.time1.patient_vs_time1.carrier)
 
 comparison.cols <- names(enrichr.nofdr[-(1:2)])
 enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
 
-trap1 <- lapply(comparison.cols, enrichr.submit, enrichr.fdr, enrichr.terms, "fdr")
-trap2 <- lapply(comparison.cols, enrichr.submit, enrichr.nofdr, enrichr.terms, "nofdr")
+trap1 <- map(comparison.cols, enrichr.submit, enrichr.fdr, enrichr.terms, "fdr")
+trap2 <- map(comparison.cols, enrichr.submit, enrichr.nofdr, enrichr.terms, "nofdr")
 
 #PCA Analysis of differentially expressed genes
 res.cols <- str_subset(colnames(fit.selection), "Res")
@@ -823,5 +815,66 @@ colnames(gstm.cor)[1] <- "Status"
 q <- ggplot(gstm.noage.df, aes(x = Age.Plot, y = Expression)) + geom_point() + facet_wrap(~ Status, ncol = 3) + geom_smooth(method = lm) 
 p <- p + xlab("Age (years)") + ylab("VST normalized Expression")
 CairoPDF("gstm_age", width = 18, height = 6)
+print(p)
+dev.off()
+
+get.updown <- function(filter.vector, enrichr.df)
+{
+    grep.vector <- str_replace_all(filter.vector, ",", "|")
+    enrichr.filter <- filter(enrichr.df, grepl(grep.vector, Symbol))
+    enrichr.vector <- factor(enrichr.filter[,2]) %>% summary
+    return(enrichr.vector)
+}
+#GO plots
+pca.gobiol <- read.xlsx("./enrichr/fdr/patient_vs_carrier/enrichr/GO_Biological_Process.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(c(6, 11, 20))
+pca.gobiol$Database <- "GO Biological Process"
+pca.gomole <- read.xlsx("./enrichr/fdr/patient_vs_carrier/enrichr/GO_Molecular_Function.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(3)
+pca.gomole$Database <- "GO Molecular Process"
+pca.reactome <- read.xlsx("./enrichr/fdr/patient_vs_carrier/enrichr/Reactome_2015.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(1)
+pca.reactome$Database <- "Reactome"
+pca.enrichr <- rbind(pca.gobiol, pca.gomole, pca.reactome)
+pca.enrichr$Gene.Count <- map(pca.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+pca.enrichr$Log.pvalue <- -(log10(pca.enrichr$P.value))
+
+fdr.pca <- select(enrichr.fdr, Symbol, Res.time1.patient_vs_time1.carrier) 
+
+pca.updown <- map(pca.enrichr$Genes, get.updown, fdr.pca) %>% reduce(rbind)
+colnames(pca.updown) <- c("Up", "Down")
+pca.enrichr <- cbind(pca.enrichr, pca.updown)
+pca.enrichr$Log.Up <- pca.enrichr$Log.pvalue * pca.enrichr$Up / pca.enrichr$Gene.Count
+pca.enrichr$Log.Down <- pca.enrichr$Log.pvalue * pca.enrichr$Down / pca.enrichr$Gene.Count
+pca.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+pca.enrichr$Format.Name <- paste(pca.enrichr$Database, ": ", pca.enrichr$GO.Term, " (", pca.enrichr$Gene.Count, ")", sep = "")
+pca.enrichr.plot <- select(pca.enrichr, Format.Name, Log.Up, Log.Down) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(pca.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = c(pca.enrichr$Format.Name, rep("", 5)), hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("pca.enrichr", height = 5, width = 8)
+print(p)
+dev.off()
+
+pco.gobiol <- read.xlsx("./enrichr/fdr/patient_vs_control/enrichr/GO_Biological_Process.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(c(1,4))
+pco.gobiol$Database <- "GO Biological Process"
+pco.gomole <- read.xlsx("./enrichr/fdr/patient_vs_control/enrichr/GO_Molecular_Function.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(1)
+pco.gomole$Database <- "GO Molecular Process"
+
+pco.enrichr <- rbind(pco.gobiol, pco.gomole)
+pco.enrichr$Gene.Count <- map(pco.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+pco.enrichr$Log.pvalue <- -(log10(pco.enrichr$P.value))
+
+fdr.pco <- select(enrichr.fdr, Symbol, Res.time1.patient_vs_time1.control) 
+
+pco.updown <- map(pco.enrichr$Genes, get.updown, fdr.pco) %>% reduce(rbind)
+colnames(pco.updown) <- c("Up", "Down")
+pco.enrichr <- cbind(pco.enrichr, pco.updown)
+pco.enrichr$Log.Up <- pco.enrichr$Log.pvalue * pco.enrichr$Up / pco.enrichr$Gene.Count
+pco.enrichr$Log.Down <- pco.enrichr$Log.pvalue * pco.enrichr$Down / pco.enrichr$Gene.Count
+pco.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+pco.enrichr$Format.Name <- paste(pco.enrichr$Database, ": ", pco.enrichr$GO.Term, " (", pco.enrichr$Gene.Count, ")", sep = "")
+pco.enrichr.plot <- select(pco.enrichr, Format.Name, Log.Up, Log.Down) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(pco.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = c(pco.enrichr$Format.Name, rep("", 3)), hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE", panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("pco.enrichr", height = 5, width = 8)
 print(p)
 dev.off()

@@ -54,7 +54,7 @@ readRDS.gz <- function(file,threads=parallel::detectCores()) {
 }
 
 intensities.means <- readRDS.gz("../dtw/save/intensities.means.rda")
-intensities.ica.genes <- readRDS.gz("../ica/save/intensities.ica.genes.m.rda")
+intensities.ica.genes <- readRDS.gz("../ica/save/intensities.ica.genes.rda")
 dtw.cc <- readRDS.gz("../dtw/save/dtw.cc.rda")
 dtw.pca <- readRDS.gz("../dtw/save/dtw.pca.rda")
 dtw.pco <- readRDS.gz("../dtw/save/dtw.pco.rda")
@@ -62,20 +62,20 @@ fdata <- readRDS.gz("../dtw/save/fdata.rda")
 
 genes <- list()
 intensities.patient <- intensities.means$Patient
-ica.patient <- intensities.ica.genes$Patient %>% map(select, Probe_Id) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
-dtw.patient <- unique(c(dtw.pca[1:2000,]$SYMBOL, dtw.pco[1:2000,]$SYMBOL)) %>% str_replace("\\-", "\\.")
+ica.patient <- intensities.ica.genes$Patient %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
+dtw.patient <- unique(c(dtw.pca[1:2000,]$Symbol, dtw.pco[1:2000,]$Symbol)) %>% str_replace("\\-", "\\.")
 genes$Patient <- unique(c(ica.patient, dtw.patient))
 saveRDS.gz(all.patient, "./save/all.patient.rda")
 
 intensities.carrier <- intensities.means$Carrier
-ica.carrier <- intensities.ica.genes$Carrier %>% map(select, Probe_Id) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
-dtw.carrier <- unique(c(dtw.pca[1:2000,]$SYMBOL, dtw.cc[1:2000,]$SYMBOL)) %>% str_replace("\\-", "\\.")
+ica.carrier <- intensities.ica.genes$Carrier %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
+dtw.carrier <- unique(c(dtw.pca[1:2000,]$Symbol, dtw.cc[1:2000,]$Symbol)) %>% str_replace("\\-", "\\.")
 genes$Carrier <- unique(c(ica.carrier, dtw.carrier))
 saveRDS.gz(all.carrier, "./save/all.carrier.rda")
 
 intensities.control <- intensities.means$Control
-ica.control <- intensities.ica.genes$Control %>% map(select, Probe_Id) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
-dtw.control <- unique(c(dtw.cc[1:2000,]$SYMBOL, dtw.pco[1:2000,]$SYMBOL)) %>% str_replace("\\-", "\\.")
+ica.control <- intensities.ica.genes$Control %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
+dtw.control <- unique(c(dtw.cc[1:2000,]$Symbol, dtw.pco[1:2000,]$Symbol)) %>% str_replace("\\-", "\\.")
 genes$Control <- unique(c(ica.control, dtw.control))
 saveRDS.gz(all.control, "./save/all.control.rda")
 
@@ -83,7 +83,9 @@ gen.mi <- function(status, expr, genes)
 {
     expr.subset <- expr[[status]]
     genes.subset <- genes[[status]]
+    
     mi.expr.df <- slice(expr.subset, match(genes.subset, Probe_Id)) 
+    print(dim(mi.expr.df))
     rownames(mi.expr.df) <- mi.expr.df$Probe_Id
     mi.expr <- select(mi.expr.df, -Probe_Id) %>% t
 
@@ -122,24 +124,24 @@ gen.mi <- function(status, expr, genes)
     plot(METree, xlab = "", sub = "", main = "")
     dev.off()
 
-    #Check if any modules are too similar and merge them.  Possibly not working.
-    ME.dissimilarity.threshold <- 0.20
-    merge.all <- mergeCloseModules(mi.expr, dynamic.colors, cutHeight = ME.dissimilarity.threshold, verbose = 3) #PC analysis may be failing because of Intel MKL Lapack routine bug.  Test with openBLAS in R compiled with gcc.
-    merged.colors <- merge.all$colors
-    merged.genes <- merge.all$newMEs
+    ##Check if any modules are too similar and merge them.  Possibly not working.
+    #ME.dissimilarity.threshold <- 0.20
+    #merge.all <- mergeCloseModules(mi.expr, dynamic.colors, cutHeight = ME.dissimilarity.threshold, verbose = 3) #PC analysis may be failing because of Intel MKL Lapack routine bug.  Test with openBLAS in R compiled with gcc.
+    #merged.colors <- merge.all$colors
+    #merged.genes <- merge.all$newMEs
 
-    CairoPDF(paste("module_eigengene_clustering_min50", status, sep = "_"), height = 10, width = 15)
-    plotDendroAndColors(geneTree, cbind(dynamic.colors, merged.colors), c("Dynamic Tree Cut", "Merged dynamic"), dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "")
-    dev.off()
+    #CairoPDF(paste("module_eigengene_clustering_min50", status, sep = "_"), height = 10, width = 15)
+    #plotDendroAndColors(geneTree, cbind(dynamic.colors, merged.colors), c("Dynamic Tree Cut", "Merged dynamic"), dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "")
+    #dev.off()
 
     #Use merged eigengenes 
-    module.colors <- merged.colors
-    saveRDS.gz(module.colors, file = "./save/module.colors.rda")
-    color.order <- c("grey", standardColors(50))
-    modules.labels <- match(module.colors, color.order)
-    saveRDS.gz(modules.labels, file = "./save/modules.labels.rda")
-    ME.genes <- merged.genes
-    saveRDS.gz(ME.genes, file = "./save/me.genes.rda")
+    #module.colors <- merged.colors
+    #saveRDS.gz(module.colors, file = "./save/module.colors.rda")
+    #color.order <- c("grey", standardColors(50))
+    #modules.labels <- match(module.colors, color.order)
+    #saveRDS.gz(modules.labels, file = "./save/modules.labels.rda")
+    #ME.genes <- merged.genes
+    #saveRDS.gz(ME.genes, file = "./save/me.genes.rda")
 
     #all.degrees <- intramodularConnectivity(adjacency.PEER, module.colors)
     #fdata <- featureData(lumi.import)@data
@@ -147,18 +149,19 @@ gen.mi <- function(status, expr, genes)
     #gene.info.join <- data.frame(nuID = featureNames(lumi.import), select(fdata, Accession, Symbol, Definition))
     #gene.info <- mutate(gene.info.join, module.colors = module.colors, mean.count = apply(expr.data.PEER, 2, mean)) %>% data.frame(all.degrees)
 
-    CairoPDF(paste("eigengenes", status, sep = "_"), height = 10, width = 18)
-    par(cex = 0.7)
-    plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
-    dev.off()
+    #CairoPDF(paste("eigengenes", status, sep = "_"), height = 10, width = 18)
+    #par(cex = 0.7)
+    #plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
+    #dev.off()
 
     symbol.vector <- mi.expr.df$Probe_Id %>% str_replace("\\.", "\\-")
-    module.expr.out <- data.frame(Symbol = symbol.vector, module.color = merged.colors)
+    module.expr.out <- data.frame(Symbol = symbol.vector, module.color = dynamic.colors)
     write.xlsx(module.expr.out, paste("./module", status, "xlsx", sep = "."))
     return(module.expr.out)
 }
 
 mi.networks <- lapply(names(genes), gen.mi, intensities.means, genes)
+mi.network <- gen.mi("Patient", intensities.means, genes)
 #names(mi.networks) <- names(genes.list)
 #saveRDS.gz(mi.networks, file = "./save/mi.networks.rda")
 
