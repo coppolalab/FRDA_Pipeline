@@ -203,7 +203,6 @@ symbols.lumi.rmreps <- getSYMBOL(rownames(lumi.rmreps.expr), 'lumiHumanAll.db') 
 lumi.rmreps.annot <- lumi.rmreps.expr[!symbols.lumi.rmreps,] #Drop any probe which is not annotated
 saveRDS.gz(lumi.rmreps.annot, file = "./save/lumi.rmreps.annot.rda")
 
-
 model.status <- model.matrix( ~ 0 + factor(lumi.rmreps.annot$Status) )
 colnames(model.status) <- c("Carrier", "Control", "Patient")
 model.status.reduce <- model.status[,-2]
@@ -427,14 +426,76 @@ get.stringdb(sig.cc, "cc.mean", "cc", 900)
 get.stringdb(sig.pca, "pca.mean", "pca", 900)
 get.stringdb(sig.pco, "pco.mean", "pco", 900)
 
-dtw.cc.m.enrichr <- map(enrichr.terms, get.enrichrdata, sig.cc, FALSE)
+dtw.cc.m.enrichr <- map(enrichr.terms, get.enrichrdata, dtw.cc.m.submit, FALSE)
 names(dtw.cc.m.enrichr) <- enrichr.terms
 map(names(dtw.cc.m.enrichr), enrichr.wkbk, dtw.cc.m.enrichr, "./enrichr/cc.mean")
 
-dtw.pca.m.enrichr <- map(enrichr.terms, get.enrichrdata, sig.pca, FALSE)
+dtw.pca.m.enrichr <- map(enrichr.terms, get.enrichrdata, dtw.pca.m.submit, FALSE)
 names(dtw.pca.m.enrichr) <- enrichr.terms
 map(names(dtw.pca.m.enrichr), enrichr.wkbk, dtw.pca.m.enrichr, "./enrichr/pca.mean")
 
-dtw.pco.m.enrichr <- map(enrichr.terms, get.enrichrdata, sig.cc, FALSE)
+dtw.pco.m.enrichr <- map(enrichr.terms, get.enrichrdata, dtw.pco.m.submit, FALSE)
 names(dtw.pco.m.enrichr) <- enrichr.terms
 map(names(dtw.pco.m.enrichr), enrichr.wkbk, dtw.pco.m.enrichr, "./enrichr/pco.mean")
+
+pca.biol <- read.xlsx("./enrichr/pca.mean/GO_Biological_Process.xlsx") %>% slice(c(7,17))
+pca.biol$Database <- "GO Biological Process"
+pca.reactome <- read.xlsx("./enrichr/pca.mean/Reactome_2015.xlsx") %>% slice(c(1,40,51))
+pca.reactome$Database <- "Reactome"
+pca.kegg <- read.xlsx("./enrichr/pca.mean/KEGG_2015.xlsx") %>% slice(1)
+pca.kegg$Database <- "KEGG"
+pca.enrichr <- rbind(pca.biol, pca.reactome, pca.kegg)
+pca.enrichr$Gene.Count <- map(pca.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+pca.enrichr$Log.pvalue <- -(log10(pca.enrichr$P.value))
+
+pca.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+pca.enrichr$Format.Name <- paste(pca.enrichr$Database, ": ", pca.enrichr$GO.Term, " (", pca.enrichr$Gene.Count, ")", sep = "")
+pca.enrichr.plot <- select(pca.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(pca.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = pca.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("pca.enrichr", height = 5, width = 8)
+print(p)
+dev.off()
+
+pco.biol <- read.xlsx("./enrichr/pco.mean/GO_Biological_Process.xlsx") %>% slice(c(7,12,15))
+pco.biol$Database <- "GO Biological Process"
+pco.molec <- read.xlsx("./enrichr/pco.mean/GO_Molecular_Function.xlsx") %>% slice(8)
+pco.molec$Database <- "GO Molecular Function"
+pco.reactome <- read.xlsx("./enrichr/pco.mean/Reactome_2015.xlsx") %>% slice(c(1,45))
+pco.reactome$Database <- "Reactome"
+pco.kegg <- read.xlsx("./enrichr/pco.mean/KEGG_2015.xlsx") %>% slice(c(1,6))
+pco.kegg$Database <- "KEGG"
+pco.enrichr <- rbind(pco.biol, pco.molec, pco.reactome, pco.kegg)
+pco.enrichr$Gene.Count <- map(pco.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+pco.enrichr$Log.pvalue <- -(log10(pco.enrichr$P.value))
+
+pco.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+pco.enrichr$Format.Name <- paste(pco.enrichr$Database, ": ", pco.enrichr$GO.Term, " (", pco.enrichr$Gene.Count, ")", sep = "")
+pco.enrichr.plot <- select(pco.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(pco.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = pco.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("pco.enrichr", height = 5, width = 8)
+print(p)
+dev.off()
+
+cc.biol <- read.xlsx("./enrichr/cc.mean/GO_Biological_Process.xlsx") %>% slice(c(12,15))
+cc.biol$Database <- "GO Biological Process"
+cc.reactome <- read.xlsx("./enrichr/cc.mean/Reactome_2015.xlsx") %>% slice(c(1,45))
+cc.reactome$Database <- "Reactome"
+cc.kegg <- read.xlsx("./enrichr/cc.mean/KEGG_2015.xlsx") %>% slice(2)
+cc.kegg$Database <- "KEGG"
+cc.enrichr <- rbind(cc.biol, cc.reactome, cc.kegg)
+cc.enrichr$Gene.Count <- map(cc.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+cc.enrichr$Log.pvalue <- -(log10(cc.enrichr$P.value))
+
+cc.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+cc.enrichr$Format.Name <- paste(cc.enrichr$Database, ": ", cc.enrichr$GO.Term, " (", cc.enrichr$Gene.Count, ")", sep = "")
+cc.enrichr.plot <- select(cc.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(cc.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = cc.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("cc.enrichr", height = 5, width = 8)
+print(p)
+dev.off()

@@ -576,24 +576,87 @@ test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'aut
 names(test) <- ls()
 unlist(test) %>% sort
 
-#Green plots
-match.exact <- paste %<<<% "^" %<<% c("$", sep = "")
+green.submit <- data.frame(Symbol = filter(modules.out, module.color == "green")$Symbol)
+green.ppi <- get.stringdb(green.submit, "green.ppi")
+green.ppi.edges <- attr(E(green.ppi), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+green.ppi.df <- data.frame(Edge = green.ppi.edges, Weight = edge_attr(green.ppi, "combined_score"))
+green.ppi.clustered <- names(V(green.ppi))[clusters(green.ppi)$membership == 1]
+
 green.members <- filter(modules.out, module.color == "green")$Symbol %>% map_chr(match.exact) %>% paste(collapse = "|")
-adjacency.green <- adjacency.PEER[grepl(green.members, rownames(adjacency.PEER)), grepl(green.members, colnames(adjacency.PEER))]
+#adjacency.green <- adjacency.PEER[grepl(green.members, rownames(adjacency.PEER)), grepl(green.members, colnames(adjacency.PEER))]
 green.igraph <- graph_from_adjacency_matrix(adjacency.green, mode = "undirected", weighted = TRUE, diag = FALSE)
 
-vertex.colors <- rainbow(vcount(green.igraph))
-V(green.igraph)$color <- vertex.colors
-edge.df <- data.frame(edge_attr(green.igraph))
+num.edges.green <- map(1:vcount(green.ppi), incident, graph = green.ppi) %>% map_dbl(length) #Computer number of edges for each vertex
+names(num.edges.green) <- names(V(green.ppi)) #Label number edges with 
+vertices.green <- names(V(green.ppi)) %>% map_chr(match.exact) %>% paste(collapse = "|")
+missing.edges.green <- !grepl(vertices.green, names(V(green.igraph)))
+pruned.green <- delete.vertices(green.igraph, which(missing.edges.green))
+
+num.edges.green <- num.edges.green[match(names(V(pruned.green)), names(num.edges.green))]
+pruned.green <- delete.vertices(pruned.green, which(num.edges.green == 0))
+pruned.green.ppi <- delete.vertices(green.ppi, which(num.edges.green == 0))
+
+green.communities.optimal <- cluster_optimal(pruned.green.ppi, weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+green.communities.edge_betweenness <- cluster_edge_betweenness(pruned.green.ppi, weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+green.communities.fast_greedy <- cluster_fast_greedy(pruned.green.ppi, weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+green.communities.infomap <- cluster_infomap(pruned.green.ppi, e.weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+green.communities.label_prop <- cluster_label_prop(pruned.green.ppi, weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+green.communities.leading_eigen <- cluster_leading_eigen(pruned.green.ppi, weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+green.communities.louvain <- cluster_louvain(pruned.green.ppi, weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+green.communities.spinglass <- cluster_spinglass(pruned.green.ppi, weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+green.communities.walktrap <- cluster_walktrap(pruned.green.ppi, weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+
+cluster.todf <- function(cluster.element)
+{
+    returnval <- data.frame(cluster.element[1], "Group" = names(cluster.element))
+    names(returnval) <- c("Members", "Group")
+    return(list(returnval))
+}
+green.communities.df <- communities(green.communities.optimal) %>% lmap(cluster.todf) %>% reduce(rbind)
+
+pruned.green.edges <- attr(E(pruned.green), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_") 
+pruned.green.df <- data.frame(Edge = pruned.green.edges, Weight = edge_attr(pruned.green, "weight")) 
+
+green.filter <- map_chr(green.ppi.df$Edge, match.exact) %>% paste(collapse = "|") %>% grepl(pruned.green.df$Edge)
+pruned.green.df[green.filter,]$Weight <- green.ppi.df$Weight / 200
+pruned.green.df[!green.filter,]$Weight <- 0
+pruned.green.df$Color <- "#dddddd99"
+pruned.green.df[green.filter,]$Color <- "#0000FF99"
+
+green.colors <- rainbow(length(unique(green.communities.df$Group)))
+green.communities.sort <- green.communities.df[match(names(V(pruned.green)), green.communities.df$Members),]
+green.colors.assign <- green.colors[green.communities.sort$Group]
+
+V(pruned.green)$color <- green.colors.assign
+edge.df <- data.frame(edge_attr(pruned.green))
 #edge.thickness <- edge.df$combined_score / 20
-igraph.nchars <- vertex_attr(green.igraph, "name") %>% map_int(nchar)
-dist.increment <- .14 / (max(igraph.nchars) - min(igraph.nchars))
-igraph.dists <- ((max(igraph.nchars) - igraph.nchars)^1.3 * dist.increment) + 0.26
+green.nchars <- vertex_attr(pruned.green, "name") %>% map_int(nchar)
+dist.green <- .14 / (max(green.nchars) - min(green.nchars))
+green.dists <- ((max(green.nchars) - green.nchars)^1.3 * dist.green) + 0.26
 
 CairoPDF("green_igraph.pdf", width = 10, height = 10)
-par(mar=c(0,0,0,0) + .1)
-plot.igraph(green.igraph, vertex.size = 6, vertex.label.dist = igraph.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", margin = 0, edge.color = "#dddddd99")
+par(mar=c(0,0,0,0) + 0.1)
+plot.igraph(pruned.green, vertex.size = 6, vertex.label.dist = green.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", margin = 0, edge.color = pruned.green.df$Color, edge.width = pruned.green.df$Weight)
 dev.off()
+
+#Green plots
+#match.exact <- paste %<<<% "^" %<<% c("$", sep = "")
+#green.members <- filter(modules.out, module.color == "green")$Symbol %>% map_chr(match.exact) %>% paste(collapse = "|")
+#adjacency.green <- adjacency.PEER[grepl(green.members, rownames(adjacency.PEER)), grepl(green.members, colnames(adjacency.PEER))]
+#green.igraph <- graph_from_adjacency_matrix(adjacency.green, mode = "undirected", weighted = TRUE, diag = FALSE)
+
+#vertex.colors <- rainbow(vcount(green.igraph))
+#V(green.igraph)$color <- vertex.colors
+#edge.df <- data.frame(edge_attr(green.igraph))
+##edge.thickness <- edge.df$combined_score / 20
+#igraph.nchars <- vertex_attr(green.igraph, "name") %>% map_int(nchar)
+#dist.increment <- .14 / (max(igraph.nchars) - min(igraph.nchars))
+#igraph.dists <- ((max(igraph.nchars) - igraph.nchars)^1.3 * dist.increment) + 0.26
+
+#CairoPDF("green_igraph.pdf", width = 10, height = 10)
+#par(mar=c(0,0,0,0) + .1)
+#plot.igraph(green.igraph, vertex.size = 6, vertex.label.dist = igraph.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", margin = 0, edge.color = "#dddddd99")
+#dev.off()
 
 gaa.green <- data.frame(Eigengene = ME.genes$green, GAA1 = lumi.cleaned$GAA1)
 p <- ggplot(gaa.green, aes(x = GAA1, y = Eigengene)) + geom_point(position = "jitter", col = "green")

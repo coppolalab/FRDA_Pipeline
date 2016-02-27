@@ -65,7 +65,8 @@ intensities.patient <- intensities.means$Patient
 ica.patient <- intensities.ica.genes$Patient %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
 dtw.patient <- unique(c(dtw.pca[1:2000,]$Symbol, dtw.pco[1:2000,]$Symbol)) %>% str_replace("\\-", "\\.")
 genes$Patient <- unique(c(ica.patient, dtw.patient))
-saveRDS.gz(all.patient, "./save/all.patient.rda")
+saveRDS.gz(ica.patient, "./save/ica.patient.rda")
+saveRDS.gz(genes$Patient, "./save/all.patient.rda")
 
 intensities.carrier <- intensities.means$Carrier
 ica.carrier <- intensities.ica.genes$Carrier %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
@@ -166,7 +167,7 @@ mi.network <- gen.mi("Patient", intensities.means, genes)
 #saveRDS.gz(mi.networks, file = "./save/mi.networks.rda")
 
 module.patients <- read.xlsx("./module.Patient.xlsx")
-module.symbols <- split(module.patients, module.patients$module.color)
+module.symbols <- split(module.patients, factor(module.patients$module.color))
 
 source("../../code/GO/enrichr.R")
 stringdb.submit <- function(module.color, module.df)
@@ -218,6 +219,92 @@ normalize.expr <- function(dataset)
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()
 unlist(test) %>% sort
+
+#blue GO
+blue.molec <- read.xlsx("./enrichr/blue/blue_GO_Molecular_Function.xlsx") %>% slice(1)
+blue.molec$Database <- "GO Molecular Function"
+blue.kegg <- read.xlsx("./enrichr/blue/blue_KEGG_2015.xlsx") %>% slice(3)
+blue.kegg$Database <- "KEGG"
+blue.reactome <- read.xlsx("./enrichr/blue/blue_Reactome_2015.xlsx") %>% slice(c(3,9))
+blue.reactome$Database <- "Reactome"
+blue.enrichr <- rbind(blue.molec, blue.kegg, blue.reactome)
+blue.enrichr$Gene.Count <- map(blue.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+blue.enrichr$Log.pvalue <- -(log10(blue.enrichr$P.value))
+
+blue.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+blue.enrichr$Format.Name <- paste(blue.enrichr$Database, ": ", blue.enrichr$GO.Term, " (", blue.enrichr$Gene.Count, ")", sep = "")
+blue.enrichr.plot <- select(blue.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(blue.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = blue.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("blue.enrichr", height = 5, width = 11)
+print(p)
+dev.off()
+
+#brown GO
+brown.biol <- read.xlsx("./enrichr/brown/brown_GO_Biological_Process.xlsx") %>% slice(c(11,16))
+brown.biol$Database <- "GO Biological Process"
+brown.molec <- read.xlsx("./enrichr/brown/brown_GO_Molecular_Function.xlsx") %>% slice(6)
+brown.molec$Database <- "GO Molecular Function"
+brown.kegg <- read.xlsx("./enrichr/brown/brown_KEGG_2015.xlsx") %>% slice(2)
+brown.kegg$Database <- "KEGG"
+brown.reactome <- read.xlsx("./enrichr/brown/brown_Reactome_2015.xlsx") %>% slice(c(23,25))
+brown.reactome$Database <- "Reactome"
+brown.enrichr <- rbind(brown.biol, brown.molec, brown.kegg, brown.reactome)
+brown.enrichr$Gene.Count <- map(brown.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+brown.enrichr$Log.pvalue <- -(log10(brown.enrichr$P.value))
+
+brown.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+brown.enrichr$Format.Name <- paste(brown.enrichr$Database, ": ", brown.enrichr$GO.Term, " (", brown.enrichr$Gene.Count, ")", sep = "")
+brown.enrichr.plot <- select(brown.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(brown.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = brown.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("brown.enrichr", height = 5, width = 8)
+print(p)
+dev.off()
+
+#red GO
+red.biol <- read.xlsx("./enrichr/red/red_GO_Biological_Process.xlsx") %>% slice(c(1,2,6))
+red.biol$Database <- "GO Biological Process"
+red.molec <- read.xlsx("./enrichr/red/red_GO_Molecular_Function.xlsx") %>% slice(2)
+red.molec$Database <- "GO Molecular Function"
+red.kegg <- read.xlsx("./enrichr/red/red_KEGG_2015.xlsx") %>% slice(1)
+red.kegg$Database <- "KEGG"
+red.reactome <- read.xlsx("./enrichr/red/red_Reactome_2015.xlsx") %>% slice(1)
+red.reactome$Database <- "Reactome"
+red.enrichr <- rbind(red.biol, red.molec, red.kegg, red.reactome)
+red.enrichr$Gene.Count <- map(red.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+red.enrichr$Log.pvalue <- -(log10(red.enrichr$P.value))
+
+red.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+red.enrichr$Format.Name <- paste(red.enrichr$Database, ": ", red.enrichr$GO.Term, " (", red.enrichr$Gene.Count, ")", sep = "")
+red.enrichr.plot <- select(red.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(red.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = red.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("red.enrichr", height = 5, width = 8)
+print(p)
+dev.off()
+
+#turquoise GO
+turquoise.biol <- read.xlsx("./enrichr/turquoise/turquoise_GO_Biological_Process.xlsx") %>% slice(1)
+turquoise.biol$Database <- "GO Biological Process"
+turquoise.reactome <- read.xlsx("./enrichr/turquoise/turquoise_Reactome_2015.xlsx") %>% slice(1)
+turquoise.reactome$Database <- "Reactome"
+turquoise.enrichr <- rbind(turquoise.biol, turquoise.reactome)
+turquoise.enrichr$Gene.Count <- map(turquoise.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+turquoise.enrichr$Log.pvalue <- -(log10(turquoise.enrichr$P.value))
+
+turquoise.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+turquoise.enrichr$Format.Name <- paste(turquoise.enrichr$Database, ": ", turquoise.enrichr$GO.Term, " (", turquoise.enrichr$Gene.Count, ")", sep = "")
+turquoise.enrichr.plot <- select(turquoise.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+p <- ggplot(turquoise.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = turquoise.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
+p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+CairoPDF("turquoise.enrichr", height = 5, width = 8)
+print(p)
+dev.off()
 
 #mi.expr.df <- slice(intensities.patient, match(genes$Patient, Probe_Id)) 
 #rownames(mi.expr.df) <- mi.expr.df$Probe_Id

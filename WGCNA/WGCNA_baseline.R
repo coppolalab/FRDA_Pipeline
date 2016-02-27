@@ -458,7 +458,7 @@ p <- ggplot(lightgreen.eigen, aes(x = Status, y = Eigengene)) + geom_point(posit
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
 p <- p + theme(axis.ticks.x = element_blank()) + ylab("Eigengene")
 p <- p + theme(axis.title.x = element_blank()) + stat_summary(aes(group = 1), fun.y = mean, geom = "line", col = "black", position = position_dodge(width = 0.9))
-p <- p + theme(legend.position = "none")
+q <- p + theme(legend.position = "none")
 
 CairoPDF("lightgreen.eigengene", height = 5, width = 7)
 print(p)
@@ -476,46 +476,84 @@ print(p)
 dev.off()
 
 #get.stringdb(data.frame(Symbol = str_split(lightgreen.biol$Genes[2], ",")[[1]]), "lightgreen_celldeath")
-
 match.exact <- paste %<<<% "^" %<<% c("$", sep = "")
+
+pcd.submit <- data.frame(Symbol = str_split(lightgreen.biol$Genes[2], ",")[[1]])
+pcd.ppi <- get.stringdb(pcd.submit, "pcd.ppi")
+pcd.ppi.edges <- attr(E(pcd.ppi), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+pcd.ppi.df <- data.frame(Edge = pcd.ppi.edges, Weight = edge_attr(pcd.ppi, "combined_score"))
+pcd.ppi.clustered <- names(V(pcd.ppi))[clusters(pcd.ppi)$membership == 1]
+
 pcd.members <- str_split(lightgreen.biol$Genes[2], ",")[[1]] %>% map_chr(match.exact) %>% paste(collapse = "|")
-adjacency.pcd <- adjacency.PEER[grepl(pcd.members, rownames(adjacency.PEER)), grepl(pcd.members, colnames(adjacency.PEER))]
+#adjacency.pcd <- adjacency.PEER[grepl(pcd.members, rownames(adjacency.PEER)), grepl(pcd.members, colnames(adjacency.PEER))]
 pcd.igraph <- graph_from_adjacency_matrix(adjacency.pcd, mode = "undirected", weighted = TRUE, diag = FALSE)
 
-pcd.colors <- rainbow(vcount(pcd.igraph))
-V(pcd.igraph)$color <- pcd.colors
-edge.df <- data.frame(edge_attr(pcd.igraph))
-#edge.thickness <- edge.df$combined_score / 20
-pcd.nchars <- vertex_attr(pcd.igraph, "name") %>% map_int(nchar)
+num.edges.pcd <- map(1:vcount(pcd.ppi), incident, graph = pcd.ppi) %>% map_dbl(length) 
+names(num.edges.pcd) <- names(V(pcd.ppi))
+num.edges.pcd <- num.edges.pcd[match(names(V(pcd.igraph)), names(num.edges.pcd))]
+pruned.pcd <- delete.vertices(pcd.igraph, which(num.edges.pcd == 0))
+
+pruned.pcd.edges <- attr(E(pruned.pcd), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_") 
+pruned.pcd.df <- data.frame(Edge = pruned.pcd.edges, Weight = edge_attr(pruned.pcd, "weight")) 
+
+pcd.filter <- map_chr(pcd.ppi.df$Edge, match.exact) %>% paste(collapse = "|") %>% grepl(pruned.pcd.df$Edge)
+pruned.pcd.df[pcd.filter,]$Weight <- pcd.ppi.df$Weight / 200
+pruned.pcd.df[!pcd.filter,]$Weight <- 0
+pruned.pcd.df$Color <- "#dddddd99"
+pruned.pcd.df[pcd.filter,]$Color <- "#0000FF99"
+
+pcd.colors <- rep("magenta", length(V(pruned.pcd)))
+pcd.colors[match(pcd.ppi.clustered, names(V(pruned.pcd)))] <- "turquoise"
+V(pruned.pcd)$color <- pcd.colors
+
+pcd.nchars <- vertex_attr(pruned.pcd, "name") %>% map_int(nchar)
 dist.pcd <- .14 / (max(pcd.nchars) - min(pcd.nchars))
 pcd.dists <- ((max(pcd.nchars) - pcd.nchars)^1.3 * dist.pcd) + 0.76
 
 CairoPDF("pcd_igraph.pdf", width = 6, height = 6)
 par(mar=c(0,0,0,0) + 0.1)
-plot.igraph(pcd.igraph, vertex.size = 20, vertex.label.dist = pcd.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = "#dddddd99")
+plot.igraph(pruned.pcd, vertex.size = 20, vertex.label.dist = pcd.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = pruned.pcd.df$Color, edge.width = pruned.pcd.df$Weight)
 dev.off()
 
+oxo.submit <- data.frame(Symbol = str_split(greenyellow.molec$Genes[1], ",")[[1]])
+oxo.ppi <- get.stringdb(oxo.submit, "oxo.ppi")
+oxo.ppi.edges <- attr(E(oxo.ppi), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+oxo.ppi.df <- data.frame(Edge = oxo.ppi.edges, Weight = edge_attr(oxo.ppi, "combined_score"))
+oxo.ppi.clustered <- names(V(oxo.ppi))[clusters(oxo.ppi)$membership == 1]
+
 oxo.members <- str_split(greenyellow.molec$Genes[1], ",")[[1]] %>% map_chr(match.exact) %>% paste(collapse = "|")
-adjacency.oxo <- adjacency.PEER[grepl(oxo.members, rownames(adjacency.PEER)), grepl(oxo.members, colnames(adjacency.PEER))]
+#adjacency.oxo <- adjacency.PEER[grepl(oxo.members, rownames(adjacency.PEER)), grepl(oxo.members, colnames(adjacency.PEER))]
 oxo.igraph <- graph_from_adjacency_matrix(adjacency.oxo, mode = "undirected", weighted = TRUE, diag = FALSE)
 
-oxo.colors <- rainbow(vcount(oxo.igraph))
-V(oxo.igraph)$color <- oxo.colors
-edge.df <- data.frame(edge_attr(oxo.igraph))
+num.edges.oxo <- map(1:vcount(oxo.ppi), incident, graph = oxo.ppi) %>% map_dbl(length) 
+names(num.edges.oxo) <- names(V(oxo.ppi))
+num.edges.oxo <- num.edges.oxo[match(names(V(oxo.igraph)), names(num.edges.oxo))]
+pruned.oxo <- delete.vertices(oxo.igraph, which(num.edges.oxo == 0))
+
+pruned.oxo.edges <- attr(E(pruned.oxo), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_") 
+pruned.oxo.df <- data.frame(Edge = pruned.oxo.edges, Weight = edge_attr(pruned.oxo, "weight")) 
+
+oxo.filter <- map_chr(oxo.ppi.df$Edge, match.exact) %>% paste(collapse = "|") %>% grepl(pruned.oxo.df$Edge)
+pruned.oxo.df[oxo.filter,]$Weight <- oxo.ppi.df$Weight / 200
+pruned.oxo.df[!oxo.filter,]$Weight <- 0
+pruned.oxo.df$Color <- "#dddddd99"
+pruned.oxo.df[oxo.filter,]$Color <- "#0000FF99"
+
+oxo.colors <- rep("magenta", length(V(pruned.oxo)))
+oxo.colors[match(oxo.ppi.clustered, names(V(pruned.oxo)))] <- "turquoise"
+
+V(pruned.oxo)$color <- oxo.colors
+edge.df <- data.frame(edge_attr(pruned.oxo))
 #edge.thickness <- edge.df$combined_score / 20
-oxo.nchars <- vertex_attr(oxo.igraph, "name") %>% map_int(nchar)
+oxo.nchars <- vertex_attr(pruned.oxo, "name") %>% map_int(nchar)
 dist.oxo <- .14 / (max(oxo.nchars) - min(oxo.nchars))
 oxo.dists <- ((max(oxo.nchars) - oxo.nchars)^1.3 * dist.oxo) + 0.76
 
 CairoPDF("oxo_igraph.pdf", width = 6, height = 6)
 par(mar=c(0,0,0,0) + 0.1)
-plot.igraph(oxo.igraph, vertex.size = 20, vertex.label.dist = oxo.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = "#dddddd99")
+plot.igraph(pruned.oxo, vertex.size = 20, vertex.label.dist = oxo.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = pruned.oxo.df$Color, edge.width = pruned.oxo.df$Weight)
 dev.off()
 
-#expr.green <- filter(expr.data.plot, module.colors == "lightgreen") %>% select(-module.colors) %>% scale
-#par(mar = c(3.5,3,2,3))
-#par(oma = c(4,0,2,0))
-#plotMat(expr.green, zlim = c(-max(abs(expr.green)), max(abs(expr.green))))
 
 ME.lightgreen.plot <- data.frame(Sample.ID = rownames(ME.genes), select(ME.genes, lightgreen), Status = lumi.import$Status) %>% filter(Status != "Carrier") %>% arrange(Status, Sample.ID)
 ME.lightgreen.plot$Sample.ID <- factor(ME.lightgreen.plot$Sample.ID, levels = ME.lightgreen.plot$Sample.ID)

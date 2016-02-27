@@ -485,11 +485,13 @@ subset.pca <- function(res.col, fit.selection, export.lumi, suffix)
 load("../phenotypedata/targets.final.rda")
 colnames(targets.final)[4] <- "sampleID"
 
-bad.slides <- c("3998573091_J", "3998573091_L", "3998582035_G") %>% paste(collapse = "|")
+#remove some duplicate arrays
+bad.slides <- c("3998573091_J", "3998573091_L", "3998582035_G") %>% paste(collapse = "|") 
 targets.final %<>% filter(!grepl(bad.slides, sampleID))
 
 #Note: Probe profiles in .csv format need to be converted to .tsv files because lumi produces errors when reading .csvs
-#Drop probes not found in all batches
+#Drop probes not found in all batches - this step is NOT normally necessary, was needed due to some inconsistencies in the 
+#settings used with GenomeStudio which cannot be resolved easily
 filenames <- list.files("../raw_data/", pattern = "*.txt|*.tsv", full.names = TRUE) #Get list of batch files
 intensities.list <- map(filenames, read_tsv) #Read files in to a list
 intensities.mat <- reduce(intensities.list, merge) #Merge all of the batches into one table
@@ -502,14 +504,14 @@ lumi.raw <- lumi.raw[,frda.key] #Subset lumi object to get rid of unrelated samp
 
 rownames(targets.final) <- targets.final$sampleID #Set the row names to be the same as the sampleID (may be unnecessary)
 pData(lumi.raw) <- targets.final #Add phenotype data
-sampleNames(lumi.raw) <- lumi.raw$Sample.Name
+sampleNames(lumi.raw) <- lumi.raw$Sample.Name #Add sample names
 
 knownstatus.key <- !grepl("Unknown|UNKNOWN", lumi.raw$Status) #Find which samples don't have missing FA status
 notsuspect.key <- !grepl("6165|6172|6174", lumi.raw$PIDN) #Find which samples don't have PIDNs with suspect FA status
 knownage.key <- !is.na(lumi.raw$Draw.Age) #Find which samples have a valid date of birth
 combined.key <- knownstatus.key & notsuspect.key & knownage.key #Find which samples pass all three of the above filters
 lumi.known <- lumi.raw[,combined.key] #Subset the lumi object according the values in combined.key
-lumi.known$Status %<>% droplevels
+lumi.known$Status %<>% droplevels #remove UNKNOWN from possible values of Status
 
 lumi.vst <- lumiT(lumi.known) #Perform variance stabilized transformation
 saveRDS.gz(lumi.known, file = "./save/lumi.known.rda")
@@ -518,13 +520,13 @@ baseline.key <- grepl("^1$|1r", lumi.vst$Sample.Num) #Find which samples are bas
 lumi.baseline <- lumi.vst[,baseline.key] #Subset lumi object for baseline samples
 
 diagnosis.colors <- c("magenta", "green", "darkcyan")
-heatmap.bars <- gen.heatmapbars(batch.colors, diagnosis.colors, phenoData(lumi.baseline)) %>% data.frame
-lumi.baseline$Batch.Color <- as.character(heatmap.bars$Batch.Color)
-lumi.baseline$Diagnosis.Color <- as.character(heatmap.bars$Diagnosis.Color)
+heatmap.bars <- gen.heatmapbars(batch.colors, diagnosis.colors, phenoData(lumi.baseline)) %>% data.frame #create colors for heatmap bar
+lumi.baseline$Batch.Color <- as.character(heatmap.bars$Batch.Color) #add variable for batch color
+lumi.baseline$Diagnosis.Color <- as.character(heatmap.bars$Diagnosis.Color) #add variable for diagnosis color
 saveRDS.gz(lumi.baseline, file = "./save/lumi.baseline.rda")
 
-batch.colors <- c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green", "blue4", "red4")
-gen.boxplot("baseline_intensity_notnorm.jpg", lumi.baseline,  batch.colors, "VST Transformed Intensity not normalized", "Intensity")
+batch.colors <- c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green", "blue4", "red4") #Assign batch colors
+gen.boxplot("baseline_intensity_notnorm.jpg", lumi.baseline,  batch.colors, "VST Transformed Intensity not normalized", "Intensity") #Make boxplot of transformed intensities
 
 lumi.norm <- lumiN(lumi.baseline, method = "rsn") #Normalize with robust spline regression
 lumi.qual <- lumiQ(lumi.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
@@ -534,37 +536,41 @@ symbols.lumi <- getSYMBOL(rownames(lumi.expr), 'lumiHumanAll.db') %>% is.na #Det
 lumi.expr.annot <- lumi.expr[!symbols.lumi,] #Drop any probe which is not annotated
 saveRDS.gz(lumi.expr.annot, file = "./save/lumi.expr.annot.rda")
 
-qcsum <- lumi.expr.annot@QC$sampleSummary %>% t %>% data.frame
+#The quality control summary can be used to get an idea of what outliers are in the data
+qcsum <- lumi.expr.annot@QC$sampleSummary %>% t %>% data.frame #Extract the quality control summary object
 colnames(qcsum) %<>% str_replace("\\.0\\.01\\.", "")
-qcsum$Sample.Name <- rownames(qcsum)
-qcsum$RIN <- lumi.expr.annot$RIN
-qcsum$Sample.Num <- lumi.expr.annot$Sample.Num
+qcsum$Sample.Name <- rownames(qcsum) #Add sample name
+qcsum$RIN <- lumi.expr.annot$RIN #Add RIN
+qcsum$Sample.Num <- lumi.expr.annot$Sample.Num #Add sample number
 
 #Regenerate plots
-gen.boxplot("baseline_intensity_norm.jpg", lumi.expr.annot, batch.colors, "RSN normalized signal intensity", "Intensity")
-gen.heatmap("baseline_heatmap_norm", lumi.expr.annot, "Clustering Based on Inter-Array Pearson Coefficient, RSN normalized")
+gen.boxplot("baseline_intensity_norm.jpg", lumi.expr.annot, batch.colors, "RSN normalized signal intensity", "Intensity") #Make box plot of normalized intensities
+gen.heatmap("baseline_heatmap_norm", lumi.expr.annot, "Clustering Based on Inter-Array Pearson Coefficient, RSN normalized") #Make heatmap of sample clustering
 
-IAC.norm <- gen.IACcluster("baseline_IAC_norm", exprs(lumi.expr.annot), "All samples")
-gen.sdplot("baseline_IAC_sd", IAC.norm, "All samples")
+#These QC plots may be somewhat redundant if you have already looked at the QC object
+IAC.norm <- gen.IACcluster("baseline_IAC_norm", exprs(lumi.expr.annot), "All samples") #Make clustering dendrogram of samples
+gen.sdplot("baseline_IAC_sd", IAC.norm, "All samples") #Make plot of standard deviations
 saveRDS.gz(IAC.norm, file = "./save/IAC.norm.rda")
 saveRDS.gz(sd.raw.norm, file = "./save/sd.raw.norm.rda")
 
 #Top 500 and 1000 genes
-lumi.mads <- apply(exprs(lumi.expr.annot), 1, mad)
-lumi.ordered <- order(lumi.mads, decreasing = TRUE)
+lumi.mads <- apply(exprs(lumi.expr.annot), 1, mad) #Get median absolute deviations of expression values
+lumi.ordered <- order(lumi.mads, decreasing = TRUE) #Use this to rank the genes by the variability of their expression
 
-top500.dist <- gen.topgenes("baseline_heatmap_500", lumi.expr.annot, "Clustering Based on the Top 500 Most Variable Genes", lumi.ordered, 500)
-top1000.dist <- gen.topgenes("baseline_heatmap_1000", lumi.expr.annot, "Clustering Based on the Top 1000 Most Variable Genes", lumi.ordered, 1000)
+top500.dist <- gen.topgenes("baseline_heatmap_500", lumi.expr.annot, "Clustering Based on the Top 500 Most Variable Genes", lumi.ordered, 500) #heatmap of top 500 most variable genes
+top1000.dist <- gen.topgenes("baseline_heatmap_1000", lumi.expr.annot, "Clustering Based on the Top 1000 Most Variable Genes", lumi.ordered, 1000) #heatmap of top 1000 most variable genes
 
 #Principal components analysis
-cm1 <- cmdscale(top1000.dist, eig = TRUE)
-gen.pca("baseline_mds_status", cm1, phenoData(lumi.expr.annot), diagnosis.colors, "Status")
-gen.pca("baseline_mds_batch", cm1, phenoData(lumi.expr.annot), batch.colors, "Batch")
+cm1 <- cmdscale(top1000.dist, eig = TRUE) #get first two principle components
+gen.pca("baseline_mds_status", cm1, phenoData(lumi.expr.annot), diagnosis.colors, "Status") #label PCs by status
+gen.pca("baseline_mds_batch", cm1, phenoData(lumi.expr.annot), batch.colors, "Batch") #label PCs by batch
 
 #Remove outlier
 #Potential suspects: CHOP_188_1_Car, CHOP_175_1_Pat
 remove.sample <- !grepl("CHOP_122_1_Pat|CHOP_14_1_Pat|CHOP_540_1_Car", sampleNames(lumi.baseline))
 lumi.rmout <- lumi.baseline[,remove.sample]# %>% lumiN(method = "rsn")
+
+#####NOTE: In talking with the Geschwind lab about this, they seem to think that renormalizing after remove such a small number of samples is unnecessary.  I have not rigorously examined this, but I think it is worth pointing out that this may be redundant
 lumi.rmout.norm <- lumiN(lumi.rmout, method = "rsn") #Normalize with robust spline regression
 lumi.rmout.qual <- lumiQ(lumi.rmout.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
 lumi.rmout.cutoff <- detectionCall(lumi.rmout.qual) #Get the count of probes which passed the detection threshold per sample
@@ -598,6 +604,8 @@ arrange(qcsum.rmout, distance.to.sample.mean)
 PIDNs <- filter(qcsum.rmout, Sample.Num == "1r")$PIDN %>% paste(collapse = "|")
 
 #Remove replicates
+#####NOTE: this is only necessary in the very unusual situation in which you have technical replicates (i.e. the same RNA was run on two microarrays)
+##### Other wise you can just skip to the next section
 reps <- sd.raw.norm.rm1[str_detect(names(sd.raw.norm.rm1), "1r")] %>% abs
 orig.key <- str_replace_all(names(reps), "1r", "1")
 orig <- sd.raw.norm.rm1[orig.key] %>% abs
@@ -638,19 +646,23 @@ gen.pca("rmreps_mds_diagnosis", cm1.rmreps, phenoData(lumi.rmreps.annot), diagno
 gen.pca("rmreps_mds_batch", cm1.rmreps, phenoData(lumi.rmreps.annot), batch.colors, "Batch")
 
 #Use ComBat for batch effect correction
-model.status <- model.matrix( ~ 0 + factor(lumi.rmreps.annot$Status) )
+#### NOTE: before running this adjustment, please check that the following things are true:
+# 1) Other covariates are not correlated
+# 2) Batch number is not confounded with another categorical variable (i.e. diagnosis, treatment, sex, etc)
+# 3) Each batch has more than one array in it
+model.status <- model.matrix( ~ 0 + factor(lumi.rmreps.annot$Status) ) #Make dummy variables out of Status
 colnames(model.status) <- c("Carrier", "Control", "Patient")
-model.status.reduce <- model.status[,-2]
+model.status.reduce <- model.status[,-2] #Remove control, because one needs n-1 dummy variables for n possible values of categorical variables
 
-model.sex <- model.matrix( ~ 0 + factor(lumi.rmreps.annot$Sex) )
+model.sex <- model.matrix( ~ 0 + factor(lumi.rmreps.annot$Sex) ) #Make dummy variables out of Sex
 colnames(model.sex) <- c("Female", "Male")
-model.sex.reduce <- model.sex[,-1]
+model.sex.reduce <- model.sex[,-1] #Remove one column (like done with Status)
 
-model.combat <- cbind(model.status.reduce, Male = model.sex.reduce, Age = as.numeric(lumi.rmreps.annot$Draw.Age), RIN = lumi.rmreps.annot$RIN)
+model.combat <- cbind(model.status.reduce, Male = model.sex.reduce, Age = as.numeric(lumi.rmreps.annot$Draw.Age), RIN = lumi.rmreps.annot$RIN) #Assemble covariate matrix with both categorical and continuous covariates
 
-expr.combat <- ComBat(dat = exprs(lumi.rmreps.annot), batch = factor(lumi.rmreps.annot$Batch), mod = model.combat)
-lumi.combat <- lumi.rmreps.annot
-exprs(lumi.combat) <- expr.combat
+expr.combat <- ComBat(dat = exprs(lumi.rmreps.annot), batch = factor(lumi.rmreps.annot$Batch), mod = model.combat) #Run ComBat
+lumi.combat <- lumi.rmreps.annot #Create a new lumi object as a copy of lumi.rmreps.annot
+exprs(lumi.combat) <- expr.combat #Update the expression values of the new lumi object to include the new, corrected intensities
 saveRDS.gz(lumi.combat, file = "./save/lumi.combat.rda")
 
 #Regenerate plots
@@ -670,6 +682,7 @@ gen.pca("combat_mds_diagnosis", cm1.combat, phenoData(lumi.combat), diagnosis.co
 gen.pca("combat_mds_batch", cm1.combat, phenoData(lumi.combat), batch.colors, "Batch")
 
 #Run PEER analysis and correlate to known covariates
+#### NOTE: This may be replaced by HCP in the near future
 gen.peer(8, exprs(lumi.combat), TRUE, model.combat)
 model.PEER_covariate <- read_csv("./factor_8.csv") %>% select(-(X1:X6))
 rownames(model.PEER_covariate) <- colnames(lumi.combat)
@@ -677,57 +690,62 @@ colnames(model.PEER_covariate) <- paste("X", 1:ncol(model.PEER_covariate), sep =
 
 source("../common_functions.R")
 
-targets1.gaa <- select(pData(lumi.combat), Sample.Name, GAA1) %>% filter(!is.na(GAA1))
-cor.gaa <- gen.cor(model.PEER_covariate, targets1.gaa)
+targets1.gaa <- select(pData(lumi.combat), Sample.Name, GAA1) %>% filter(!is.na(GAA1)) #Get GAA1 value for those patients who have it
+cor.gaa <- gen.cor(model.PEER_covariate, targets1.gaa) #Correlate to PEER factors
 
-targets1.onset <- select(pData(lumi.combat), Sample.Name, Onset) %>% filter(!is.na(Onset)) 
-cor.onset <- gen.cor(model.PEER_covariate, targets1.onset)
+targets1.onset <- select(pData(lumi.combat), Sample.Name, Onset) %>% filter(!is.na(Onset)) #Get age of onset for those patients who have it
+cor.onset <- gen.cor(model.PEER_covariate, targets1.onset) #Correlate to PEER factors
 
-PEER.traits.all <- cbind(cor.gaa, cor.onset) %>% data.frame
-PEER.traits.pval <- select(PEER.traits.all, contains("p.value")) %>% as.matrix
-PEER.traits.cor <- select(PEER.traits.all, -contains("p.value")) %>% as.matrix
+PEER.traits.all <- cbind(cor.gaa, cor.onset) %>% data.frame #Make table of correlation values
+PEER.traits.pval <- select(PEER.traits.all, contains("p.value")) %>% as.matrix #Extract p values
+PEER.traits.cor <- select(PEER.traits.all, -contains("p.value")) %>% as.matrix #Extract r-squared values
 
-text.matrix.PEER <- paste(signif(PEER.traits.cor, 2), '\n(', signif(PEER.traits.pval, 1), ')', sep = '')
+text.matrix.PEER <- paste(signif(PEER.traits.cor, 2), '\n(', signif(PEER.traits.pval, 1), ')', sep = '') #make text matrix
 dim(text.matrix.PEER) <- dim(PEER.traits.cor)
-gen.text.heatmap(PEER.traits.cor, text.matrix.PEER, colnames(PEER.traits.cor), rownames(PEER.traits.cor), "", "PEER factor-trait relationships")
+gen.text.heatmap(PEER.traits.cor, text.matrix.PEER, colnames(PEER.traits.cor), rownames(PEER.traits.cor), "", "PEER factor-trait relationships") #Make labeled heatmap of correlations of PEER factors to traits
 
-PEER.trait.out <- data.frame(Factor = rownames(PEER.traits.cor), PEER.traits.cor, PEER.traits.pval)
+PEER.trait.out <- data.frame(Factor = rownames(PEER.traits.cor), PEER.traits.cor, PEER.traits.pval) #Write correlations to a table
 write_csv(PEER.trait.out, "PEER_trait_cor.csv")
 
-PEER.weights <- read_csv("./weight_8.csv") %>% select(-(X1:X6))
-PEER.weights.sums <- colSums(abs(PEER.weights)) %>% data.frame
-PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums)
+#Plot PEER weights
+PEER.weights <- read_csv("./weight_8.csv") %>% select(-(X1:X6)) #Get weights of PEER factors.  The first 6 columns are dropped because they contain the weights for the other covariates
+PEER.weights.sums <- colSums(abs(PEER.weights)) %>% data.frame #Get sums of weights for each factor
+PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums) #Add column to label by factor
 colnames(PEER.weights.sums)[1] <- "Weight"
 
+#ggplot of factor versus weight
 p <- ggplot(PEER.weights.sums, aes(x = factor(Factor), y = as.numeric(Weight), group = 1)) + geom_line(color = "blue") 
 p <- p + theme_bw() + xlab("Factor") + ylab("Weight")
 CairoPDF("./PEER_weights", height = 4, width = 6)
 print(p)
 dev.off()
 
-#Linear model fitting
-model.design <- cbind(model.status, Male = model.sex.reduce, Age = as.numeric(lumi.combat$Draw.Age), RIN = lumi.combat$RIN)
-model.full <- cbind(model.design, model.PEER_covariate)
+#Removing effects of covariates + PEER factors  !!DO NOT USE FOR LINEAR MODELING WITH CONTRASTS!!
+model.cov <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.combat$Draw.Age), RIN = lumi.combat$RIN) #Create model matrix of covariates to be removed
+model.full.cov <- cbind(model.cov, model.PEER_covariate) #Add PEER factors
+export.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.full.cov, design = model.status) #Remove the effects of covariates, with the difference in diagnoses being supplied as the design argument to preserve those group differences
+export.lumi <- lumi.combat #Make a copy of lumi object
+exprs(export.lumi) <- export.expr #Transfer cleaned expression values into new lumi object
+saveRDS.gz(export.lumi, file = "./save/export.lumi.rda")
+gen.boxplot("baseline_intensity_corrected.jpg", export.lumi, batch.colors, "Covariate-corrected intensity", "Intensity") #Replot intensities to make sure they look okay
+
+#Collapse the data by symbol
+fdata <- fData(lumi.combat) #Get featureData from lumi object
+lumi.combat <- lumi.combat[!is.na(fdata$SYMBOL),] #Remove the probes with missing symbols (this isn't supposed to be necessary!)
+fdata <- fData(lumi.combat) #Extract featureData again
+pdata <- pData(lumi.combat) #Extract phenoData
+expr.collapse <- collapseRows(exprs(lumi.combat), factor(fdata$SYMBOL), rownames(lumi.combat), method = "function", methodFunction = colMeans) #collapseRows by symbol
+saveRDS.gz(expr.collapse, file = "./save/expr.collapse.rda")
+
+model.design <- cbind(model.status, Male = model.sex.reduce, Age = as.numeric(lumi.combat$Draw.Age), RIN = lumi.combat$RIN) #Make covariate matrix for limma
+model.full <- cbind(model.design, model.PEER_covariate) #Add PEER factors
 saveRDS.gz(model.full, file = "./save/model.full.rda")
 
-#Removing effects of covariates + PEER factors  !!DO NOT USE FOR LINEAR MODELING WITH CONTRASTS!!
-model.cov <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.combat$Draw.Age), RIN = lumi.combat$RIN)
-model.full.cov <- cbind(model.cov, model.PEER_covariate)
-export.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.full.cov, design = model.status)
-export.lumi <- lumi.combat
-exprs(export.lumi) <- export.expr
-saveRDS.gz(export.lumi, file = "./save/export.lumi.rda")
-gen.boxplot("baseline_intensity_corrected.jpg", export.lumi, batch.colors, "Covariate-corrected intensity", "Intensity")
-
-
-fdata <- fData(lumi.combat)
-lumi.combat <- lumi.combat[!is.na(fdata$SYMBOL),]
-fdata <- fData(lumi.combat)
-pdata <- pData(lumi.combat)
-expr.collapse <- collapseRows(exprs(lumi.combat), factor(fdata$SYMBOL), rownames(lumi.combat), method = "function", methodFunction = colMeans)
-saveRDS.gz(expr.collapse, file = "./save/expr.collapse.rda")
+#Block correlation is being ignored for now
 block.correlation <- readRDS.gz("./save/block.correlation.rda") #Run on hoffman
 #fit.object.block <- gen.fit.block(expr.collapse$datETcollapsed, model.full, block.correlation$consensus, lumi.combat$Family)
+
+#Fit limma linear model 
 fit.object <- gen.fit(expr.collapse$datETcollapsed, model.full)
 saveRDS.gz(fit.object, file = "./save/fit.object.rda")
 
@@ -736,30 +754,30 @@ ratio.exp <- gen.ratios(expr.collapse$datETcollapsed, pdata)
 saveRDS.gz(ratio.exp, file = "./save/ratio.exp.rda")
 
 #Generate statisical cutoff
-decide <- list(c("fdr", 0.05), c("fdr", 0.1), c("none", 0.001), c("none", 0.005), c("none", 0.01))
-decide.plot <- ldply(decide, gen.decide, fit.object, FALSE) %>% melt(id.vars = c("Test", "Num", "Direction"))
-gen.decideplot("./threshold_selection", decide.plot)
+decide <- list(c("fdr", 0.05), c("fdr", 0.1), c("none", 0.001), c("none", 0.005), c("none", 0.01)) #Specify significance cutoffs
+decide.plot <- ldply(decide, gen.decide, fit.object, FALSE) %>% melt(id.vars = c("Test", "Num", "Direction")) #Compute significance cutoffs
+gen.decideplot("./threshold_selection", decide.plot) #Plot different significance cutoffs
 
-decide.final <- gen.decide(c("none", 0.001), fit.object, TRUE) %>% melt(id.vars = c("Test", "Num", "Direction"))
-gen.decideplot("./selected_threshold", decide.final)
+decide.final <- gen.decide(c("none", 0.001), fit.object, TRUE) %>% melt(id.vars = c("Test", "Num", "Direction")) #Compute signifance cutoff p < 0.001, no FDR adjustment
+gen.decideplot("./selected_threshold", decide.final) #Plot cutoff
 
-decide.final.fdr <- gen.decide(c("fdr", 0.1), fit.object, TRUE) %>% melt(id.vars = c("Test", "Num", "Direction"))
-gen.decideplot("./selected_threshold_fdr", decide.final.fdr, 3, 4)
+decide.final.fdr <- gen.decide(c("fdr", 0.1), fit.object, TRUE) %>% melt(id.vars = c("Test", "Num", "Direction")) #Compute significance cutoff p < 0.1, FDR adjusted
+gen.decideplot("./selected_threshold_fdr", decide.final.fdr, 3, 4) #plot cutoff
 
 #Make tables
-de.object <- read_tsv("./fit_none.tsv")
-de.object.fdr <- read_tsv("./fit_fdr.tsv")
+de.object <- read_tsv("./fit_none.tsv") #Read in unadjusted fit object
+de.object.fdr <- read_tsv("./fit_fdr.tsv") #Read in adjusted fit object
 rownames(de.object.fdr) <- rownames(expr.collapse$datETcollapsed)
-fit.selection <- gen.tables(de.object, lumi.combat, ratio.exp, "pLess001")
-fit.selection.fdr <- gen.tables(de.object.fdr, lumi.combat, ratio.exp, "fdrLess01")
+fit.selection <- gen.tables(de.object, lumi.combat, ratio.exp, "pLess001") #create differential expression table for unadjusted fit
+fit.selection.fdr <- gen.tables(de.object.fdr, lumi.combat, ratio.exp, "fdrLess01") #create differential expression table for adjusted fit
 saveRDS.gz(fit.selection, file = "./save/fit.selection.rda")
 saveRDS.gz(fit.selection.fdr, file = "./save/fit.selection.fdr.rda")
 
 #P-value histogram
-gen.pval.hist("./hist_pvalue", fit.object$p.value)
+gen.pval.hist("./hist_pvalue", fit.object$p.value) 
 
 #Venn diagram
-gen.venndiagram("./venn", results)
+gen.venndiagram("./venn", results) 
 gen.venndiagram("./venn_fdr", results.fdr)
 
 #Anova heatmaps
@@ -767,6 +785,7 @@ clust.none <- gen.anova(fit.selection, "none")
 clust.fdr <- gen.anova(fit.selection.fdr, "fdr")
 clust.pca <- dist(clust.fdr[[2]]) %>% (flashClust::hclust)
 
+#Code for getting size of objects in memory
 objects.size <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(objects.size) <- ls()
 unlist(objects.size) %>% sort
@@ -787,6 +806,7 @@ res.cols <- str_subset(colnames(fit.selection), "Res")
 mds.none <- lapply(res.cols, subset.pca, fit.selection, export.lumi,  "none")
 mds.fdr <- lapply(res.cols, subset.pca, fit.selection.fdr, export.lumi, "fdr")
 
+#Some code for a specific plot, not relevant for most uses
 gstm.expr <- expr.collapse$datETcollapsed["GSTM3",]
 gstm.df <- data.frame(Status = pdata$Status, Expression = gstm.expr)
 gstm.df$Status %<>% factor(levels = c("Control", "Carrier", "Patient"))
@@ -825,6 +845,8 @@ get.updown <- function(filter.vector, enrichr.df)
     enrichr.vector <- factor(enrichr.filter[,2]) %>% summary
     return(enrichr.vector)
 }
+
+#### NOTE: These are GO plots for this specific data.  The tables used and rows chosen were hand selected and must be updated for any new data
 #GO plots
 pca.gobiol <- read.xlsx("./enrichr/fdr/patient_vs_carrier/enrichr/GO_Biological_Process.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(c(6, 11, 20))
 pca.gobiol$Database <- "GO Biological Process"
@@ -843,7 +865,7 @@ colnames(pca.updown) <- c("Up", "Down")
 pca.enrichr <- cbind(pca.enrichr, pca.updown)
 pca.enrichr$Log.Up <- pca.enrichr$Log.pvalue * pca.enrichr$Up / pca.enrichr$Gene.Count
 pca.enrichr$Log.Down <- pca.enrichr$Log.pvalue * pca.enrichr$Down / pca.enrichr$Gene.Count
-pca.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
+pca.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
 pca.enrichr$Format.Name <- paste(pca.enrichr$Database, ": ", pca.enrichr$GO.Term, " (", pca.enrichr$Gene.Count, ")", sep = "")
 pca.enrichr.plot <- select(pca.enrichr, Format.Name, Log.Up, Log.Down) %>% melt(id.vars = "Format.Name") 
 
