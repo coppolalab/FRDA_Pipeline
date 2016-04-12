@@ -1,7 +1,6 @@
 #Some utils
 library(R.utils)
 
-#Test
 #For DE analysis
 library(Biobase)
 library(marray)
