@@ -13,12 +13,12 @@ gen.cor <- function(dataset, trait.df)
     return(cbind(module.trait.cor, module.trait.cor.pval))
 }
 
-gen.text.heatmap <- function(cor.dataset, text.matrix, x.names, y.names, maintitle, filename)
+gen.text.heatmap <- function(cor.dataset, text.matrix, x.names, y.names, maintitle, filename, zlim.plot = c(-1,1))
 {
     width.dynamic <- 3 + (1 * ncol(text.matrix))
     CairoPDF(filename, width = width.dynamic, height = 10)
     par(mar = c(8, 8, 3, 3))
-    labeledHeatmap(Matrix = cor.dataset, xLabels = x.names, yLabels = y.names, ySymbols = y.names, yColorLabels = TRUE, colors = greenWhiteRed(50), textMatrix = text.matrix, setStdMargins = F, cex.text = 0.5, zlim = c(-1,1), main = maintitle)
+    labeledHeatmap(Matrix = cor.dataset, xLabels = x.names, yLabels = y.names, ySymbols = y.names, yColorLabels = TRUE, colors = greenWhiteRed(50), textMatrix = text.matrix, setStdMargins = F, cex.text = 0.5, zlim = zlim.plot, main = maintitle)
     dev.off()
 }
 

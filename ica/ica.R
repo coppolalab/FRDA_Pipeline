@@ -180,7 +180,7 @@ seed.ICA <- function(intensities, ica.list = list(), iter.count = 0)
 {
    if (iter.count < 250) 
    {
-        ica.new <- map(intensities, select, -Symbol) %>% map(fastICA, 4, "deflation") %>% map(`[[`, "S") %>% map(data.frame, Symbol = intensities[[1]]$Symbol) %>% map(setnames)
+        ica.new <- map(intensities, fastICA, 4, "deflation") %>% map(`[[`, "S") %>% map(data.frame, Symbol = rownames(intensities[[1]]))
         iter.count <- iter.count + 1
         ica.list <- c(ica.list, ica.new)
         print(iter.count)

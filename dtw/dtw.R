@@ -42,6 +42,8 @@ library(dplyr)
 library(tidyr)
 library(doBy)
 
+match.exact <- mkchain(map_chr(paste %<<<% "^" %<<% c("$", sep = "")), paste(collapse = "|"))
+
 gen.median <- function(dataset)
 {
     intensities.median <- by(dataset, factor(dataset$variable), select, -PIDN, -variable, -Status) %>% lapply(Compose(as.matrix, colMedians)) %>% reduce(rbind) %>% data.frame
@@ -49,25 +51,34 @@ gen.median <- function(dataset)
     return(intensities.median)
 }
 
-gen.mean <- function(dataset)
+#gen.mean <- function(dataset)
+#{
+    #intensities.mean <- by(dataset, factor(dataset$variable), select, -PIDN, -variable, -Status) %>% lapply(Compose(as.matrix, colMeans)) %>% reduce(rbind) %>% data.frame
+    #intensities.mean$Symbol <- unique(dataset$variable)
+    #return(intensities.mean)
+#}
+
+gen.mean <- function(expr.orig, pdata)
 {
-    intensities.mean <- by(dataset, factor(dataset$variable), select, -PIDN, -variable, -Status) %>% lapply(Compose(as.matrix, colMeans)) %>% reduce(rbind) %>% data.frame
-    intensities.mean$Symbol <- unique(dataset$variable)
-    return(intensities.mean)
+    id.filter <- rownames(expr.orig) %>% match.exact
+    timepoints.vector <- filter(pdata, grepl(id.filter, Sample.Name))$Sample.Num
+    expr.means <- collapseRows(expr.orig, timepoints.vector, rownames(expr.orig), method = "function", methodFunction = colMeans)$datETcollapsed
+    #intensities.mean$Symbol <- unique(dataset$variable)
+    return(t(expr.means))
 }
 
 gen.dist <- function(dataset)
 {
     dtws <- mapply(dtw, split(dataset[[1]], row(dataset[[1]])), split(dataset[[2]], row(dataset[[2]])))
-    colnames(dtws) <- rownames(dataset)
+    colnames(dtws) <- rownames(dataset[[1]])
     dists <- apply(dtws, 2, `[[`, 'normalizedDistance')
     return(dists)
 }
 
 gen.dtw <- function(dataset)
 {
-    combinations <- combn(dataset, 2, simplify = FALSE) %>% lapply(function(x) lapply(x, select, -Symbol) )
-    dists <- lapply(combinations, gen.dist)
+    combinations <- combn(dataset, 2, simplify = FALSE)
+    dists <- map(combinations, gen.dist)
     return(dists)
 }
 
@@ -256,7 +267,7 @@ dev.off()
 #Removing effects of covariates + PEER factors  !!DO NOT USE FOR LINEAR MODELING WITH CONTRASTS!!
 model.cov <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.combat$Draw.Age), RIN = lumi.combat$RIN)
 model.full.cov <- cbind(model.cov, model.PEER_covariate)
-export.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.full.cov, design = model.status)
+export.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.full.cov)
 export.lumi <- lumi.combat
 exprs(export.lumi) <- export.expr
 saveRDS.gz(export.lumi, file = "./save/export.lumi.rda")
@@ -281,17 +292,18 @@ fdata.first$nuID <- rownames(fdata.first)
 lumi.final <- lumi.final[!is.na(fdata.first$SYMBOL),]
 fdata <- fData(lumi.final)
 lumi.exprs <- exprs(lumi.final)
-lumi.collapse <- collapseRows(lumi.exprs, factor(fdata$SYMBOL), rownames(lumi.exprs), method = "function", methodFunction = colMeans)
-lumi.exprs.collapse <- lumi.collapse$datETcollapsed %>% t
+lumi.collapse.expr <- collapseRows(lumi.exprs, factor(fdata$SYMBOL), rownames(lumi.exprs), method = "function", methodFunction = colMeans)
+lumi.collapse <- ExpressionSet(assayData = lumi.collapse.expr$datETcollapsed, phenoData = phenoData(lumi.final))
+#lumi.exprs.collapse <- lumi.collapse$datETcollapsed %>% t
 
 saveRDS.gz(lumi.final, "./save/lumi.final.rda")
 saveRDS.gz(lumi.exprs.collapse, "./save/lumi.exprs.collapse.rda")
 saveRDS.gz(fdata, "./save/fdata.rda")
 
-intensities.long <- data.frame(Sample.Num = lumi.final$Sample.Num, PIDN = lumi.final$PIDN, Status = lumi.final$Status, lumi.exprs.collapse) 
-intensities.melt <- melt(intensities.long, id.vars = c("Sample.Num", "PIDN", "Status"))
-intensities.summed <- dcast(intensities.melt, PIDN + variable + Status ~ Sample.Num, value.var = "value")
-saveRDS.gz(intensities.summed, "./save/intensities.summed.rda")
+#intensities.long <- data.frame(Sample.Num = lumi.final$Sample.Num, PIDN = lumi.final$PIDN, Status = lumi.final$Status, lumi.exprs.collapse) 
+#intensities.melt <- melt(intensities.long, id.vars = c("Sample.Num", "PIDN", "Status"))
+#intensities.summed <- dcast(intensities.melt, PIDN + variable + Status ~ Sample.Num, value.var = "value")
+#saveRDS.gz(intensities.summed, "./save/intensities.summed.rda")
 
 source("../../code/GO/enrichr.R")
 
@@ -331,9 +343,10 @@ dtw.pco.enrichr <- map(enrichr.terms, get.enrichrdata, dtw.pco.submit, FALSE)
 names(dtw.pco.enrichr) <- enrichr.terms
 map(names(dtw.pco.enrichr), enrichr.wkbk, dtw.pco.enrichr, "./enrichr/pco.median")
 
-intensities.means <- by(intensities.summed, factor(intensities.summed$Status), gen.mean)
+intensities.means <- by(t(exprs(lumi.collapse)), factor(lumi.collapse$Status), gen.mean, pData(lumi.collapse))
 saveRDS.gz(intensities.means, "./save/intensities.means.rda")
 intensities.dists.m <- gen.dtw(intensities.means) %>% reduce(cbind) %>% data.frame
+#test <- gen.dist(list(intensities.means$Carrier, intensities.means$Control))
 rownames(intensities.dists.m) <- colnames(lumi.exprs.collapse)
 colnames(intensities.dists.m) <- coltitles
 intensities.dists.m$Symbol <- rownames(intensities.dists.m)
@@ -352,7 +365,9 @@ gen.small.workbook(dtw.pco.m, "patient.control.mean.xlsx")
 dtw.cc.m.submit <- dtw.cc.m[1:500,]
 dtw.pca.m.submit <- dtw.pca.m[1:500,]
 dtw.pco.m.submit <- dtw.pco.m[1:500,]
-
+saveRDS.gz(dtw.cc.m.submit, "./save/dtw.cc.submit.rda")
+saveRDS.gz(dtw.pca.m.submit, "./save/dtw.pca.submit.rda")
+saveRDS.gz(dtw.pco.m.submit, "./save/dtw.pco.submit.rda")
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()

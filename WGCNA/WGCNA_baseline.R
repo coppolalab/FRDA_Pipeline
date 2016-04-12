@@ -36,29 +36,17 @@ library(readr)
 library(openxlsx)
 library(parallel)
 
-CV <- function(data.vector)
-{
-    coef.var <- sd(data.vector) / mean(data.vector) * 100
-    return(coef.var)
-}
+match.exact <- mkchain(map_chr(paste %<<<% "^" %<<% c("$", sep = "")), paste(collapse = "|"))
 
-gen.cv <- function(dataset)
+saveRDS.gz <- function(object,file,threads=parallel::detectCores()) 
 {
-    cv <- apply(dataset, 1, CV) %>% as.vector
-    dataset.cv <- mutate(data.frame(dataset), Coef.var = cv, Probe_Id = rownames(dataset)) %>% arrange(desc(Coef.var))
-    dataset.arr <- select(dataset.cv, -Coef.var) %>% slice(1:25000) 
-    rownames(dataset.arr) <- dataset.arr$Probe_Id
-    dataset.arr <- select(dataset.arr, -Probe_Id) %>% t
-    return(dataset.arr)
-}
-
-saveRDS.gz <- function(object,file,threads=parallel::detectCores()) {
   con <- pipe(paste0("pigz -p",threads," > ",file),"wb")
   saveRDS(object, file = con)
   close(con)
 }
 
-readRDS.gz <- function(file,threads=parallel::detectCores()) {
+readRDS.gz <- function(file,threads=parallel::detectCores()) 
+{
   con <- pipe(paste0("pigz -d -c -p",threads," ",file))
   object <- readRDS(file = con)
   close(con)
@@ -109,11 +97,11 @@ enrichr.submit <- function(index, full.df, enrichr.terms, use.weights)
 {
     dataset <- filter(full.df, module.colors == index)
     dir.create(file.path("./enrichr", index), showWarnings = FALSE)
-    enrichr.data <- lapply(enrichr.terms, get.enrichrdata, dataset, FALSE)
+    enrichr.data <- map(enrichr.terms, get.enrichrdata, dataset, FALSE)
     enrichr.names <- enrichr.terms[!is.na(enrichr.data)]
     enrichr.data <- enrichr.data[!is.na(enrichr.data)]
     names(enrichr.data) <- enrichr.names
-    trap1 <- lapply(names(enrichr.data), enrichr.wkbk, enrichr.data, index)
+    trap1 <- map(names(enrichr.data), enrichr.wkbk, enrichr.data, index)
 }
 
 enrichr.wkbk <- function(subindex, full.df, index)
@@ -160,7 +148,6 @@ plot.eigencor <- function(module.traits.pval, status.col, status.vector)
 }
 
 lumi.import <- readRDS.gz(file = "../baseline_lumi/save/export.lumi.rda")
-#PEER.factors <- select(read_csv("../baseline_lumi/factor_8.csv"), -(X1:X6))
 
 #Calculate scale free topology measures for different values of power adjacency function
 powers <- c(c(1:10), seq(from = 12, to = 39, by = 2))
@@ -169,15 +156,15 @@ fdata <- fData(lumi.import)
 lumi.import <- lumi.import[!is.na(fdata$SYMBOL),]
 fdata <- fData(lumi.import)
 expr.data.PEER <- exprs(lumi.import)
-expr.collapse <- collapseRows(expr.data.PEER, factor(fdata$SYMBOL), rownames(expr.data.PEER), method = "function", methodFunction = colMeans)$datETcollapsed %>% t
+expr.collapse <- collapseRows(expr.data.PEER, factor(fdata$SYMBOL), rownames(expr.data.PEER))$datETcollapsed %>% t
+saveRDS.gz(expr.collapse, "./save/expr.collapse.rda")
 
-sft.PEER <- pickSoftThreshold(expr.collapse, powerVector = powers, verbose = 5, networkType = "signed")
+sft.PEER <- pickSoftThreshold(expr.collapse, powerVector = powers, verbose = 5, corFnc = bicor, corOptions = list(maxPOutliers = 0.05), networkType = "signed")
 sft.PEER.df <- sft.PEER$fitIndices
 saveRDS.gz(sft.PEER, file = "./save/sft.peer.rda")
 
 #Plot scale indendence and mean connectivity as functions of power
 sft.PEER.df$multiplied <- sft.PEER.df$SFT.R.sq * -sign(sft.PEER.df$slope)
-sft.combat.df$multiplied <- sft.combat.df$SFT.R.sq * -sign(sft.combat.df$slope)
 p <- ggplot(sft.PEER.df, aes(x = Power,  y = multiplied, label = Power)) + geom_point() + geom_text(vjust = -0.6, size = 4, col = "red")
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + geom_hline(aes(yintercept = 0.9))
 p <- p + xlab("Soft Threshold") + ylab("Scale Free Topology Model Fit, signed R^2") + ggtitle("Scale Independence")
@@ -192,13 +179,12 @@ CairoPDF(file = "./meanconnectivity", width = 6, height = 6)
 print(p)
 dev.off()
 
-softPower <- 8
-adjacency.PEER <- adjacency(expr.collapse, power = softPower, type = "signed")
+softPower <- 10
+adjacency.PEER <- adjacency(expr.collapse, power = softPower, type = "signed", corFnc = "bicor", corOptions = "maxPOutliers = 0.05")
 saveRDS.gz(adjacency.PEER, file = "./save/adjacency.PEER.rda")
 
 TOM.PEER <- TOMsimilarity(adjacency.PEER, verbose = 5)
 dissimilarity.TOM <- 1 - TOM.PEER
-saveRDS.gz(TOM.PEER, file = "./save/tom.PEER.rda")
 saveRDS.gz(dissimilarity.TOM, file = "./save/dissimilarity.TOM.rda")
 
 geneTree = flashClust(as.dist(dissimilarity.TOM), method = "average")
@@ -208,7 +194,7 @@ CairoPDF(file = "./genecluster", height = 10, width = 15)
 plot(geneTree, xlab = "", sub = "", main = "Gene clustering on TOM-based dissimilarity", labels = FALSE, hang = 0.04)
 dev.off()
 
-min.module.size <- 50
+min.module.size <- 20
 
 #Identify modules using dynamic tree cutting with hybrid clustering
 dynamic.modules <- cutreeDynamic(dendro = geneTree, method = "hybrid", distM = dissimilarity.TOM, cutHeight = 0.995, deepSplit = 2, pamRespectsDendro = FALSE, minClusterSize = min.module.size, verbose = 2)
@@ -222,17 +208,17 @@ dev.off()
 #Calculate module eigengenes
 ME.list <- moduleEigengenes(expr.collapse, colors = dynamic.colors, softPower = softPower, nPC = 1)
 ME.genes <- ME.list$eigengenes
-MEDiss <- 1 - cor(ME.genes)
+MEDiss <- 1 - bicor(ME.genes, maxPOutliers = 0.05)
 METree <- flashClust(as.dist(MEDiss), method = "average")
 saveRDS.gz(METree, file = "./save/me.tree.rda")
 
-CairoPDF(file = "./module_eigengene_clustering_min50", height = 10, width = 15)
+CairoPDF(file = "./module_eigengene_clustering_min50_tree", height = 10, width = 15)
 plot(METree, xlab = "", sub = "", main = "")
 dev.off()
 
 #Check if any modules are too similar and merge them.  Possibly not working.
-ME.dissimilarity.threshold <- 0.05
-merge.all <- mergeCloseModules(expr.collapse, dynamic.colors, cutHeight = ME.dissimilarity.threshold, verbose = 3) #PC analysis may be failing because of Intel MKL Lapack routine bug.  Test with openBLAS in R compiled with gcc.
+ME.dissimilarity.threshold <- 0.2
+merge.all <- mergeCloseModules(expr.collapse, dynamic.colors, cutHeight = ME.dissimilarity.threshold, corFnc = bicor, corOptions = list(maxPOutliers = 0.05), verbose = 3) #PC analysis may be failing because of Intel MKL Lapack routine bug.  Test with openBLAS in R compiled with gcc.
 merged.colors <- merge.all$colors
 merged.genes <- merge.all$newMEs
 
@@ -249,20 +235,60 @@ saveRDS.gz(modules.labels, file = "./save/modules.labels.rda")
 ME.genes <- merged.genes
 saveRDS.gz(ME.genes, file = "./save/me.genes.rda")
 
-all.degrees <- intramodularConnectivity(adjacency.PEER, module.colors)
-colnames(fdata) %<>% tolower %>% capitalize
-gene.info <- data.frame(Symbol = rownames(all.degrees), module.color = module.colors, all.degrees)
-
 CairoPDF("eigengenes", height = 10, width = 18)
 par(cex = 0.7)
 plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
 dev.off()
 
+modules.out <- data.frame(Symbol = colnames(expr.collapse), Module = module.colors)
+write.xlsx(modules.out, "modules_out.xlsx")
+
+eigengene.model <- function(ME.vector, trait.vector)
+{
+    trait.df <- data.frame(Trait = trait.vector, ME = ME.vector)
+    trait.aov <- aov(ME ~ Trait, trait.df) %>% TukeyHSD
+    trait.tukey <- data.frame(trait.aov$Trait)
+    colnames(trait.tukey) %<>% str_replace(" ", ".")
+    return(select(trait.tukey, diff, p.adj))
+}
+
+eigengene.anova <- function(ME.vector, trait.vector)
+{
+    trait.df <- data.frame(Trait = trait.vector, ME = ME.vector)
+    trait.anova <- lm(ME ~ Trait, trait.df) %>% anova
+    return(trait.anova$'Pr(>F)'[1])
+}
+
+targets.final.known <- pData(lumi.import)
+targets.final.known$Status %<>% factor(levels = c("Control", "Carrier", "Patient"))
+anova.status <- map_dbl(ME.genes, eigengene.anova, targets.final.known$Status) %>% p.adjust("fdr")
+
+cor.status <- map(ME.genes, eigengene.model, targets.final.known$Status)
+status.diff <- map(cor.status, select, diff) %>% map(t) %>% reduce(rbind) %>% data.frame
+rownames(status.diff) <- names(cor.status)
+status.pval <- map(cor.status, select, p.adj) %>% map(t) %>% reduce(rbind) %>% data.frame
+rownames(status.pval) <- names(cor.status)
+
+pval.adjust <- map(status.pval, p.adjust, method = "fdr") %>% reduce(cbind) %>% data.frame
+rownames(pval.adjust) <- rownames(status.pval)
+colnames(pval.adjust) <- paste(colnames(status.pval), ".pval")
+status.pval$Module <- rownames(status.pval)
+
+text.matrix.traits <- paste(signif(as.matrix(status.diff), 2), '\n(', signif(as.matrix(pval.adjust), 1), ')', sep = '')
+dim(text.matrix.traits) = dim(status.diff)
+
+heatmap.range <- c(min(as.matrix(status.diff)) * 1.1, max(as.matrix(status.diff)) * 1.1)
+gen.text.heatmap(as.matrix(status.diff), text.matrix.traits, colnames(status.diff), colnames(ME.genes), "", "module-trait relationships", heatmap.range)
+
+all.degrees <- intramodularConnectivity(adjacency.PEER, module.colors)
+colnames(fdata) %<>% tolower %>% capitalize
+gene.info <- data.frame(Symbol = rownames(all.degrees), module.color = module.colors, all.degrees)
+
 write_csv(data.frame(table(module.colors)), path = "./final_eigengenes.csv") 
 gene.info$kscaled <- by(gene.info, gene.info$module.color, select, kWithin) %>% llply(function(x) { x / max (x) }) %>% reduce(c)
 saveRDS.gz(gene.info, file = "./save/gene.info.rda")
 
-gene.module.membership <- as.data.frame(cor(expr.collapse, ME.genes, use = "p"))
+gene.module.membership <- as.data.frame(bicor(expr.collapse, ME.genes, maxPOutliers = 0.05))
 module.membership.pvalue <- as.data.frame(corPvalueStudent(as.matrix(gene.module.membership), nrow(expr.collapse)))
 names(gene.module.membership) <- str_replace(names(ME.genes),"ME", "MM.")
 colnames(module.membership.pvalue) <- str_replace(names(ME.genes),"ME", "MM.pvalue.")
@@ -296,113 +322,151 @@ colnames(ME.genes) %<>% str_replace("ME", "")
 ME.genes.plot <- mutate(data.frame(ME.genes), Sample.ID = sample.ids)
 expr.data.plot <- data.frame(t(expr.collapse), module.colors)
 cluster <- makeForkCluster(8)
-split(expr.data.plot, expr.data.plot$module.colors) %>% parLapply(cl = cluster, gen.heatmap, ME.genes.plot)
+#split(expr.data.plot, expr.data.plot$module.colors) %>% parLapply(cl = cluster, gen.heatmap, ME.genes.plot)
 #by(expr.data.plot, expr.data.plot$module.colors, gen.heatmap, ME.genes.plot)
+green.plot <- filter(expr.data.plot, module.colors == "green")
+green.table <- filter(module.membership, module.color == "green") #%>% select(Symbol, MM.green)
+gen.heatmap(green.plot, ME.genes.plot)
 
-modules.out <- select(gene.info, Symbol, module.color)
-write.xlsx(modules.out, "modules_out.xlsx")
+#modules.out <- select(gene.info, Symbol, module.color)
 #targets.final.known$Sample.Name %<>% str_replace(" ", "")
 
 source("../../code/GO/enrichr.R")
 
-enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2016", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
+enrichr.terms <- c("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2016", "WikiPathways_2016", "Reactome_2016", "BioCarta_2016", "PPI_Hub_Proteins", "HumanCyc_2016", "NCI-Nature_2016", "Panther_2016") 
 #enrichr.submit("grey", modules.out, enrichr.terms, FALSE)
 color.names <- unique(module.colors) %>% sort
-trap1 <- l_ply(color.names, enrichr.submit, modules.out, enrichr.terms, FALSE)
+trap1 <- map(color.names, enrichr.submit, modules.out, enrichr.terms, FALSE)
+#blue.test <- filter(modules.out, module.color == "blue")
+#test <- get.enrichrdata("GO_Biological_Process", blue.test, FALSE)
+#test <- enrichr.submit("blue", modules.out, enrichr.terms, FALSE)
 
 split(modules.out, modules.out$module.color) %>% map(submit.stringdb)
+green.submit <- filter(modules.out, Module == "green")
+green.ppi <- get.stringdb(green.submit, "green", "./stringdb")
+
+green.ppi.edges <- attr(E(green.ppi), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+green.ppi.df <- data.frame(Edge = green.ppi.edges, Weight = edge_attr(green.ppi, "combined_score"))
+green.ppi.clustered <- names(V(green.ppi))[clusters(green.ppi)$membership == 1]
+
+green.members <- filter(modules.out, Module == "green")$Symbol %>% map_chr(match.exact) %>% paste(collapse = "|")
+adjacency.green <- adjacency.PEER[grepl(green.members, rownames(adjacency.PEER)), grepl(green.members, colnames(adjacency.PEER))]
+green.igraph <- graph_from_adjacency_matrix(adjacency.green, mode = "undirected", weighted = TRUE, diag = FALSE)
+
+num.edges.green <- map(1:vcount(green.ppi), incident, graph = green.ppi) %>% map_dbl(length) #Computer number of edges for each vertex
+names(num.edges.green) <- names(V(green.ppi)) #Label number edges with 
+vertices.green <- names(V(green.ppi)) %>% map_chr(match.exact) %>% paste(collapse = "|")
+missing.edges.green <- !grepl(vertices.green, names(V(green.igraph)))
+pruned.green <- delete.vertices(green.igraph, which(missing.edges.green))
+
+num.edges.green <- num.edges.green[match(names(V(pruned.green)), names(num.edges.green))]
+pruned.green <- delete.vertices(pruned.green, which(num.edges.green == 0))
+pruned.green.ppi <- delete.vertices(green.ppi, which(num.edges.green == 0))
+
+green.communities.optimal <- cluster_optimal(pruned.green.ppi, weights = edge_attr(pruned.green.ppi, "combined_score")/1000)
+
+cluster.todf <- function(cluster.element)
+{
+    returnval <- data.frame(cluster.element[1], "Group" = names(cluster.element))
+    names(returnval) <- c("Members", "Group")
+    return(list(returnval))
+}
+green.communities.df <- communities(green.communities.optimal) %>% lmap(cluster.todf) %>% reduce(rbind)
+
+pruned.green.edges <- attr(E(pruned.green), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_") 
+pruned.green.df <- data.frame(Edge = pruned.green.edges, Weight = edge_attr(pruned.green, "weight")) 
+
+green.filter <- map_chr(green.ppi.df$Edge, match.exact) %>% paste(collapse = "|") %>% grepl(pruned.green.df$Edge)
+pruned.green.df[green.filter,]$Weight <- green.ppi.df$Weight / 200
+pruned.green.df[!green.filter,]$Weight <- 0
+pruned.green.df$Color <- "#dddddd99"
+pruned.green.df[green.filter,]$Color <- "#0000FF99"
+
+green.colors <- rainbow(length(unique(green.communities.df$Group)))
+green.communities.sort <- green.communities.df[match(names(V(pruned.green)), green.communities.df$Members),]
+green.colors.assign <- green.colors[green.communities.sort$Group]
+
+V(pruned.green)$color <- green.colors.assign
+edge.df <- data.frame(edge_attr(pruned.green))
+#edge.thickness <- edge.df$combined_score / 20
+green.nchars <- vertex_attr(pruned.green, "name") %>% map_int(nchar)
+dist.green <- .14 / (max(green.nchars) - min(green.nchars))
+green.dists <- ((max(green.nchars) - green.nchars)^1.3 * dist.green) + 0.26
+
+CairoPDF("green_igraph.pdf", width = 10, height = 10)
+par(mar=c(0,0,0,0) + 0.1)
+plot.igraph(pruned.green, vertex.size = 6, vertex.label.dist = green.dists, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", margin = 0, edge.color = pruned.green.df$Color, edge.width = pruned.green.df$Weight)
+dev.off()
+
+green.ppi.colors <- rainbow(length(unique(green.communities.df$Group)))
+green.ppi.communities.sort <- green.communities.df[match(names(V(pruned.green.ppi)), green.communities.df$Members),]
+green.ppi.colors.assign <- green.ppi.colors[green.ppi.communities.sort$Group]
+V(pruned.green.ppi)$color <- green.ppi.colors.assign
+CairoPDF("green_igraph_original.pdf", width = 10, height = 10)
+par(mar=c(0,0,0,0) + 0.1)
+plot.igraph(pruned.green.ppi, vertex.size = 6, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", margin = 0, edge.color = "#dddddd99", edge.width = green.ppi.df$Weight / 200)
+dev.off()
 
 submit.stringdb <- function(module.subset)
 {
-    get.stringdb(module.subset, unique(module.subset$module.color), "./stringdb")
+    catch <- get.stringdb(module.subset, unique(module.subset$module.color), "./stringdb")
 }
 
 rownames(ME.genes) <- rownames(expr.collapse)
+PEER.factors <- read_csv("../baseline_lumi/factor_8.csv") %>% select(-(X1:X6))
 rownames(PEER.factors) <- rownames(expr.collapse)
 colnames(PEER.factors) <- paste("X", 1:ncol(PEER.factors), sep = "")
 
 source("../common_functions.R")
 
-gen.cor.status <- function(status.values, dataset, trait.df)
-{
-    #print(dataset)
-    dataset %<>% mutate(Sample.Name = rownames(dataset))
-    status.key <- paste(status.values[1], " == 1 | ", status.values[2], " == 1", sep = "")
-    trait.df.subset <- filter_(trait.df, status.key)
-    sample.key <- paste(trait.df.subset$Sample.Name, collapse = "|")
-    dataset.reduce <- filter(dataset, grepl(sample.key, Sample.Name))
-    module.trait.cor <- cor(select(dataset.reduce, -Sample.Name), select_(trait.df.subset, status.values[2]), use = "p")
-    module.trait.cor.pval <- corPvalueStudent(module.trait.cor, nrow(dataset.reduce))
-    colnames(module.trait.cor.pval) %<>% paste(".p.value", sep = "") 
-    combined.df <- cbind(module.trait.cor, module.trait.cor.pval)
-    colnames(combined.df) <- c(paste(status.values, collapse = "."), paste(c(status.values, "p.value"), collapse = "."))
-    return(combined.df)
-}
+#targets.age <- select(targets.final.known, Sample.Name, Draw.Age) #%>% filter(!is.na(Draw.Age))
+#targets.age$Draw.Age %<>% as.numeric
+#cor.age <- gen.cor(ME.genes, targets.age)
 
-targets.final.known <- pData(lumi.import)
-targets.final.known$Status %<>% factor
-levels(targets.final.known$Status) <- c("Control", "Carrier", "Patient")
-targets.status <- model.matrix( ~ 0 + factor(targets.final.known$Status) ) %>% data.frame
-status.cols <- c("Control", "Carrier", "Patient") 
-colnames(targets.status) <- status.cols
-targets.status %<>% mutate(Sample.Name = targets.final.known$Sample.Name)
-status.list <- combn(status.cols, 2, simplify = FALSE)
-cor.status <- map(status.list, gen.cor.status, ME.genes, targets.status) %>% reduce(cbind)
+#targets.sex <- filter(targets.final.known, Sex != "UNKNOWN")
+#targets.sex.m <- model.matrix( ~ 0 + factor(targets.sex$Sex) )[,-1] %>% data.frame 
+#colnames(targets.sex.m) <- c("Sex")
+#targets.sex.m %<>% mutate(Sample.Name = targets.final.known$Sample.Name)
+#cor.sex <- gen.cor(ME.genes, targets.sex.m)
 
-targets.age <- select(targets.final.known, Sample.Name, Draw.Age) %>% filter(!is.na(Draw.Age))
-targets.age$Draw.Age %<>% as.numeric
-cor.age <- gen.cor(ME.genes, targets.age)
+#targets.rin <- select(targets.final.known, Sample.Name, RIN) 
+#cor.rin <- gen.cor(ME.genes, targets.rin)
 
-targets.sex <- filter(targets.final.known, Sex != "UNKNOWN")
-targets.sex.m <- model.matrix( ~ 0 + factor(targets.sex$Sex) )[,-1] %>% data.frame 
-colnames(targets.sex.m) <- c("Sex")
-targets.sex.m %<>% mutate(Sample.Name = targets.final.known$Sample.Name)
-cor.sex <- gen.cor(ME.genes, targets.sex.m)
+#targets.onset <- select(targets.final.known, Sample.Name, Onset) %>% filter(!is.na(Onset))
+#targets.onset$Onset %<>% as.numeric
+#cor.onset.PEER <- gen.cor(PEER.factors, targets.onset)
 
-targets.rin <- select(targets.final.known, Sample.Name, RIN) 
-cor.rin <- gen.cor(ME.genes, targets.rin)
+#PEER.factors.plot <- select(read_csv("../baseline_lumi/factor_8.csv"), -(X1:X6))
+#names(PEER.factors.plot) <- paste("X", 1:ncol(PEER.factors.plot), sep = "")
+#PEER.factors.df <- mutate(PEER.factors.plot, Sample.Name = targets.final.known$Sample.Name) 
+#cor.PEER <- gen.cor(ME.genes, PEER.factors.df) %>% data.frame
 
-targets.gaa <- select(targets.final.known, Sample.Name, GAA1 ) %>% filter(!is.na(GAA1))
-cor.gaa.PEER <- gen.cor(PEER.factors, targets.gaa)
+#module.traits.all <- cbind(cor.status, cor.age, cor.sex, cor.rin) %>% data.frame
+#module.traits.pval <- select(module.traits.all, contains("p.value")) %>% as.matrix %>% apply(2, p.adjust, "fdr")
+#module.traits.cor <- select(module.traits.all, -contains("p.value")) %>% as.matrix
 
-targets.onset <- select(targets.final.known, Sample.Name, Onset) %>% filter(!is.na(Onset))
-targets.onset$Onset %<>% as.numeric
-cor.onset.PEER <- gen.cor(PEER.factors, targets.onset)
+#module.PEER.all <- cbind(cor.gaa.PEER, cor.onset.PEER) %>% data.frame
+#module.PEER.pval <- select(module.PEER.all, contains("p.value")) %>% as.matrix %>% apply(2, p.adjust, "fdr")
+#module.PEER.cor <- select(module.PEER.all, -contains("p.value")) %>% as.matrix
 
-PEER.factors.plot <- select(read_csv("../baseline_lumi/factor_8.csv"), -(X1:X6))
-names(PEER.factors.plot) <- paste("X", 1:ncol(PEER.factors.plot), sep = "")
-PEER.factors.df <- mutate(PEER.factors.plot, Sample.Name = targets.final.known$Sample.Name) 
-cor.PEER <- gen.cor(ME.genes, PEER.factors.df) %>% data.frame
+#cor.PEER.cor <- select(cor.PEER, -contains("p.value")) %>% as.matrix
+#cor.PEER.pval <- select(cor.PEER, contains("p.value")) %>% as.matrix
 
-module.traits.all <- cbind(cor.status, cor.age, cor.sex, cor.rin) %>% data.frame
-module.traits.pval <- select(module.traits.all, contains("p.value")) %>% as.matrix %>% apply(2, p.adjust, "fdr")
-module.traits.cor <- select(module.traits.all, -contains("p.value")) %>% as.matrix
+#module.trait.out <- data.frame(Module = rownames(module.traits.cor), module.traits.cor, module.traits.pval)
+#module.PEER.out <- data.frame(Factor = rownames(module.PEER.cor), module.PEER.cor, module.PEER.pval)
+#cor.PEER.out <- data.frame(Module = rownames(cor.PEER), cor.PEER.cor, cor.PEER.pval)
 
-module.PEER.all <- cbind(cor.gaa.PEER, cor.onset.PEER) %>% data.frame
-module.PEER.pval <- select(module.PEER.all, contains("p.value")) %>% as.matrix %>% apply(2, p.adjust, "fdr")
-module.PEER.cor <- select(module.PEER.all, -contains("p.value")) %>% as.matrix
+#write_csv(module.trait.out, "module_trait_cor.csv")
+#write_csv(module.PEER.out, "module_PEER_cor.csv")
+#write_csv(cor.PEER.out, "cor_PEER_cor.csv")
 
-cor.PEER.cor <- select(cor.PEER, -contains("p.value")) %>% as.matrix
-cor.PEER.pval <- select(cor.PEER, contains("p.value")) %>% as.matrix
+#text.matrix.PEER <- paste(signif(module.PEER.cor, 2), '\n(', signif(module.PEER.pval, 1), ')', sep = '')
+#text.matrix.PEERcor <- paste(signif(cor.PEER.cor, 2), '\n(', signif(cor.PEER.pval, 1), ')', sep = '')
+#dim(text.matrix.PEER) = dim(module.PEER.cor)
+#dim(text.matrix.PEERcor) = dim(cor.PEER.cor)
 
-module.trait.out <- data.frame(Module = rownames(module.traits.cor), module.traits.cor, module.traits.pval)
-module.PEER.out <- data.frame(Factor = rownames(module.PEER.cor), module.PEER.cor, module.PEER.pval)
-cor.PEER.out <- data.frame(Module = rownames(cor.PEER), cor.PEER.cor, cor.PEER.pval)
-
-write_csv(module.trait.out, "module_trait_cor.csv")
-write_csv(module.PEER.out, "module_PEER_cor.csv")
-write_csv(cor.PEER.out, "cor_PEER_cor.csv")
-
-text.matrix.traits <- paste(signif(module.traits.cor, 2), '\n(', signif(module.traits.pval, 1), ')', sep = '')
-text.matrix.PEER <- paste(signif(module.PEER.cor, 2), '\n(', signif(module.PEER.pval, 1), ')', sep = '')
-text.matrix.PEERcor <- paste(signif(cor.PEER.cor, 2), '\n(', signif(cor.PEER.pval, 1), ')', sep = '')
-dim(text.matrix.traits) = dim(module.traits.cor)
-dim(text.matrix.PEER) = dim(module.PEER.cor)
-dim(text.matrix.PEERcor) = dim(cor.PEER.cor)
-
-gen.text.heatmap(module.traits.cor, text.matrix.traits, colnames(module.traits.cor), colnames(ME.genes), "", "module-trait relationships")
-gen.text.heatmap(module.PEER.cor, text.matrix.PEER, colnames(module.PEER.cor), rownames(module.PEER.cor), "", "PEER factor-trait relationships")
-gen.text.heatmap(cor.PEER.cor, text.matrix.PEERcor, colnames(cor.PEER.cor), colnames(ME.genes), "", "module-PEER factor relationships")
+#gen.text.heatmap(module.PEER.cor, text.matrix.PEER, colnames(module.PEER.cor), rownames(module.PEER.cor), "", "PEER factor-trait relationships")
+#gen.text.heatmap(cor.PEER.cor, text.matrix.PEERcor, colnames(cor.PEER.cor), colnames(ME.genes), "", "module-PEER factor relationships")
 
 plot.eigencor(module.traits.pval, "Control.Carrier", lumi.import$Status)
 plot.eigencor(module.traits.pval, "Control.Patient", lumi.import$Status)

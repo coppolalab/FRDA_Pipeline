@@ -226,7 +226,10 @@ model.sex <- model.matrix( ~ 0 + factor(lumi.patient.annot$Sex) )
 colnames(model.sex) <- c("Female", "Male")
 model.sex.reduce <- model.sex[,-1]
 
-model.combat <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.patient.annot$Draw.Age), RIN = lumi.patient.annot$RIN, GAA = lumi.patient.annot$GAA1, Onset = as.numeric(lumi.patient.annot$Onset))
+model.combat <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.patient.annot$Draw.Age), RIN = lumi.patient.annot$RIN, GAA = lumi.patient.annot$GAA1, Onset = as.numeric(lumi.patient.annot$Onset)) %>% data.frame
+age.sex <- lm(model.combat$Age ~ model.combat$Male) %>% anova
+age.gaa <- lm(model.combat$Age ~ model.combat$GAA) %>% anova
+sex.gaa <- lm(model.combat$Male ~ model.combat$GAA) %>% anova
 
 expr.combat <- ComBat(dat = exprs(lumi.patient.annot), batch = factor(lumi.patient.annot$Batch), mod = model.combat)
 lumi.combat <- lumi.patient.annot
@@ -319,6 +322,41 @@ cor.df$Symbol <- rownames(expr.collapse)
 cor.df %<>% arrange(P.value)
 cor.df.sg <- filter(cor.df, P.value < 0.05)
 write.xlsx(cor.df.sg, "significant_gaa.xlsx")
+
+cortopassi.genes <- read.xlsx("~/Downloads/RNASeq2014&2015-Info Share-Cortopassi&Coppola.xlsx", 3)
+cortopassi.genes$Symbol <- toupper(cortopassi.genes$Gene)
+cortopassi.coppola <- join(cortopassi.genes, cor.df) %>% filter(!is.na(Correlation)) %>% arrange(P.value)
+wb <- createWorkbook()
+addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
+writeDataTable(wb = wb, sheet = 1, x = cortopassi.coppola, withFilter = FALSE)
+sig.pvalues <- createStyle(fontColour = "red")
+conditionalFormatting(wb, 1, cols = 8, rows = 1:nrow(cortopassi.coppola), rule = "<0.05", style = sig.pvalues)
+conditionalFormatting(wb, 1, cols = 7, rows = 1:nrow(cortopassi.coppola), style = c("#63BE7B", "white", "red"), type = "colourScale")
+conditionalFormatting(wb, 1, cols = 3, rows = 1:nrow(cortopassi.coppola), style = c("#63BE7B", "white", "red"), type = "colourScale")
+#setColWidths(wb, 1, cols = 1:ncol(cortopassi.coppola), widths = "auto")
+pageSetup(wb, 1, orientation = "landscape", fitToWidth = TRUE)
+freezePane(wb, 1, firstRow = TRUE)
+showGridLines(wb, 1, showGridLines = TRUE)
+saveWorkbook(wb, "./cortopassi.coppola.gaa.xlsx", overwrite = TRUE) 
+
+gottsfeld.genes <- read.xlsx("~/Downloads/list for Giovanni.xlsx")
+colnames(gottsfeld.genes)[1] <- "Symbol"
+colnames(gottsfeld.genes)[5] <- "FDR.2"
+colnames(gottsfeld.genes)[7] <- "FDR.3"
+colnames(gottsfeld.genes) %<>% str_replace_all("\\/", ".vs.")
+gottsfeld.coppola <- join(gottsfeld.genes, cor.df) %>% filter(!is.na(Correlation)) %>% arrange(P.value)
+wb <- createWorkbook()
+addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
+writeDataTable(wb = wb, sheet = 1, x = gottsfeld.coppola, withFilter = FALSE)
+sig.pvalues <- createStyle(fontColour = "red")
+conditionalFormatting(wb, 1, cols = 9, rows = 1:nrow(gottsfeld.coppola), rule = "<0.05", style = sig.pvalues)
+conditionalFormatting(wb, 1, cols = 8, rows = 1:nrow(gottsfeld.coppola), style = c("#63BE7B", "white", "red"), type = "colourScale")
+#conditionalFormatting(wb, 1, cols = 3, rows = 1:nrow(gottsfeld.coppola), style = c("#63BE7B", "white", "red"), type = "colourScale")
+#setColWidths(wb, 1, cols = 1:ncol(gottsfeld.coppola), widths = "auto")
+pageSetup(wb, 1, orientation = "landscape", fitToWidth = TRUE)
+freezePane(wb, 1, firstRow = TRUE)
+showGridLines(wb, 1, showGridLines = TRUE)
+saveWorkbook(wb, "./gottsfeld.coppola.gaa.xlsx", overwrite = TRUE) 
 
 source("../../code/GO/enrichr.R")
 enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 

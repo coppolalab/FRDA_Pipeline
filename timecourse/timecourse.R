@@ -78,8 +78,9 @@ patient.timegrp <- rep(1:4, (ncol(lumi.patient)/4))
 patient.out <- mb.long(lumi.patient, method = "1D", type = "robust", times = 4, reps = patient.reps, rep.grp = patient.repgrp, time.grp = patient.timegrp)
 saveRDS.gz(patient.out, "./save/patient.out.rda")
 
-patient.genes <- data.frame(Symbol = rownames(lumi.exprs.collapse), Hotelling = patient.out$HotellingT2) %>% arrange(desc(Hotelling)) %>% filter(Hotelling > 10)
+patient.genes <- data.frame(Symbol = rownames(lumi.exprs.collapse), Hotelling = patient.out$HotellingT2) %>% arrange(desc(Hotelling)) #%>% filter(Hotelling > 10)
 write.xlsx(patient.genes, "./patient.out.xlsx")
+writeLines(as.character(unlist(patient.genes$Symbol)), "./patient.genes.out")
 
 lumi.carrier <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Car")]
 carrier.reps <- rep(ncol(lumi.carrier)/4, nrow(lumi.carrier))

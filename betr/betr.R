@@ -217,12 +217,12 @@ lumi.exprs.collapse <- readRDS.gz("./save/lumi.exprs.collapse.rda") %>% t
 lumi.patient <- lumi.exprs.collapse
 
 patient.repgrp <- rep(1:(ncol(lumi.patient)/4), each = 4)
-watient.timegrp <- rep(1:4, (ncol(lumi.patient)/4))
+patient.timegrp <- rep(1:4, (ncol(lumi.patient)/4))
 patient.out <- betr(lumi.patient, timepoint = pData(lumi.final)$Sample.Num, replicate = as.integer(factor(pData(lumi.final)$PIDN)), twoCondition = FALSE)
 saveRDS.gz(patient.out, "./save/patient.out.rda")
 
 patient.genes <- data.frame(Symbol = names(patient.out), Probability = patient.out) %>% arrange(desc(Probability))
-write.xlsx(patient.genes[1:500,], "./patient.out.xlsx")
+write.xlsx(patient.genes[1:1206,], "./patient.out.xlsx")
 
 lumi.carrier <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Car")]
 carrier.repgrp <- rep(1:(ncol(lumi.carrier)/4), each = 4)

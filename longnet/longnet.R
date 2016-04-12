@@ -63,14 +63,14 @@ fdata <- readRDS.gz("../dtw/save/fdata.rda")
 genes <- list()
 intensities.patient <- intensities.means$Patient
 ica.patient <- intensities.ica.genes$Patient %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
-dtw.patient <- unique(c(dtw.pca[1:2000,]$Symbol, dtw.pco[1:2000,]$Symbol)) %>% str_replace("\\-", "\\.")
+dtw.patient <- unique(c(dtw.pca[1:300,]$Symbol, dtw.pco[1:300,]$Symbol)) %>% str_replace("\\-", "\\.")
 genes$Patient <- unique(c(ica.patient, dtw.patient))
 saveRDS.gz(ica.patient, "./save/ica.patient.rda")
 saveRDS.gz(genes$Patient, "./save/all.patient.rda")
 
 intensities.carrier <- intensities.means$Carrier
 ica.carrier <- intensities.ica.genes$Carrier %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
-dtw.carrier <- unique(c(dtw.pca[1:2000,]$Symbol, dtw.cc[1:2000,]$Symbol)) %>% str_replace("\\-", "\\.")
+dtw.carrier <- unique(c(dtw.pca[1:300,]$Symbol, dtw.cc[1:300,]$Symbol)) %>% str_replace("\\-", "\\.")
 genes$Carrier <- unique(c(ica.carrier, dtw.carrier))
 saveRDS.gz(all.carrier, "./save/all.carrier.rda")
 
@@ -82,13 +82,13 @@ saveRDS.gz(all.control, "./save/all.control.rda")
 
 gen.mi <- function(status, expr, genes)
 {
-    expr.subset <- expr[[status]]
+    expr.subset <- expr[[status]] %>% data.frame
+    expr.subset$Symbol <- rownames(expr.subset)
     genes.subset <- genes[[status]]
     
-    mi.expr.df <- slice(expr.subset, match(genes.subset, Probe_Id)) 
-    print(dim(mi.expr.df))
-    rownames(mi.expr.df) <- mi.expr.df$Probe_Id
-    mi.expr <- select(mi.expr.df, -Probe_Id) %>% t
+    mi.expr.df <- slice(expr.subset, match(genes.subset, Symbol)) 
+    rownames(mi.expr.df) <- mi.expr.df$Symbol
+    mi.expr <- select(mi.expr.df, -Symbol) %>% t
 
     mi.mrnet <- minet(mi.expr, method = "mrnet", estimator = "mi.shrink", disc = "equalwidth")
     TOM.PEER <- TOMsimilarity(mi.mrnet, verbose = 5)
@@ -155,7 +155,7 @@ gen.mi <- function(status, expr, genes)
     #plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
     #dev.off()
 
-    symbol.vector <- mi.expr.df$Probe_Id %>% str_replace("\\.", "\\-")
+    symbol.vector <- mi.expr.df$Symbol %>% str_replace("\\.", "\\-")
     module.expr.out <- data.frame(Symbol = symbol.vector, module.color = dynamic.colors)
     write.xlsx(module.expr.out, paste("./module", status, "xlsx", sep = "."))
     return(module.expr.out)
@@ -176,6 +176,8 @@ stringdb.submit <- function(module.color, module.df)
     get.stringdb(module.genes, module.color)
 }
 map(names(module.symbols), stringdb.submit, module.symbols)
+blue.stringdb <- get.stringdb(module.symbols$blue, "blue", edge.threshold = 700)
+red.stringdb <- get.stringdb(module.symbols$red, "red", edge.threshold = 700)
 
 enrichr.submit <- function(index, full.df, enrichr.terms, use.weights)
 {
@@ -206,15 +208,6 @@ enrichr.wkbk <- function(subindex, full.df, index)
 
 enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
 trap1 <- map(names(module.symbols), enrichr.submit, module.symbols, enrichr.terms, FALSE)
-
-normalize.expr <- function(dataset)
-{
-    PIDNS <- dataset$PIDN
-    dataset %<>% select(-Probe_Id, -PIDN, -Status)
-    dataset.normalized <- sweep(dataset, 1, dataset$`1`)
-    dataset.normalized$PIDN <- PIDNS
-    return(dataset.normalized)
-}
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()
