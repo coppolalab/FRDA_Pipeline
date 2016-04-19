@@ -61,9 +61,11 @@ dtw.pco <- readRDS.gz("../dtw/save/dtw.pco.rda")
 fdata <- readRDS.gz("../dtw/save/fdata.rda")
 
 genes <- list()
-intensities.patient <- intensities.means$Patient
-ica.patient <- intensities.ica.genes$Patient %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) %>% unique
-dtw.patient <- unique(c(dtw.pca[1:300,]$Symbol, dtw.pco[1:300,]$Symbol)) %>% str_replace("\\-", "\\.")
+#intensities.patient <- intensities.means$Patient
+intensities.patient <- readRDS.gz("../ica/save/expr.means.rda")
+ica.patient <- intensities.ica.genes$Patient %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) #%>% unique
+dtw.patient <- unique(c(dtw.pca[1:300,]$Symbol, dtw.pco[1:300,]$Symbol)) #%>% str_replace("\\-", "\\.")
+dtw.patient <- dtw.patient[dtw.patient %in% rownames(intensities.patient)]
 genes$Patient <- unique(c(ica.patient, dtw.patient))
 saveRDS.gz(ica.patient, "./save/ica.patient.rda")
 saveRDS.gz(genes$Patient, "./save/all.patient.rda")
@@ -80,93 +82,91 @@ dtw.control <- unique(c(dtw.cc[1:2000,]$Symbol, dtw.pco[1:2000,]$Symbol)) %>% st
 genes$Control <- unique(c(ica.control, dtw.control))
 saveRDS.gz(all.control, "./save/all.control.rda")
 
-gen.mi <- function(status, expr, genes)
-{
-    expr.subset <- expr[[status]] %>% data.frame
-    expr.subset$Symbol <- rownames(expr.subset)
-    genes.subset <- genes[[status]]
-    
-    mi.expr.df <- slice(expr.subset, match(genes.subset, Symbol)) 
-    rownames(mi.expr.df) <- mi.expr.df$Symbol
-    mi.expr <- select(mi.expr.df, -Symbol) %>% t
+test.name <- rownames(intensities.patient) %>% toupper %>% str_replace_all("\\-", "\\.")
+test.name2 <- toupper(genes$Patient)
 
-    mi.mrnet <- minet(mi.expr, method = "mrnet", estimator = "mi.shrink", disc = "equalwidth")
-    TOM.PEER <- TOMsimilarity(mi.mrnet, verbose = 5)
-    dissimilarity.TOM <- 1 - TOM.PEER
+mi.expr <- intensities.patient[match(genes$Patient, rownames(intensities.patient)),]
 
-    CairoPDF(paste("scalefree", status, sep = "_"), height = 6, width = 6)
-    scaleFreePlot(TOM.PEER) #Meh
-    dev.off()
+#mi.empirical best
+#mi.empirical R^2 tie, steeper slope
+mi.mrnet <- minet(t(mi.expr), method = "mrnet", estimator = "mi.shrink", disc = "equalwidth")
+TOM.PEER <- TOMsimilarity(mi.mrnet, verbose = 5)
+dissimilarity.TOM <- 1 - TOM.PEER
 
-    geneTree = flashClust(as.dist(dissimilarity.TOM), method = "average")
+CairoPDF("scalefree", height = 6, width = 6)
+scaleFreePlot(TOM.PEER) #Meh
+dev.off()
 
-    CairoPDF(file = paste("./genecluster", status, sep = "_"), height = 10, width = 15)
-    plot(geneTree, xlab = "", sub = "", main = "Gene clustering on TOM-based dissimilarity", labels = FALSE, hang = 0.04)
-    dev.off()
+geneTree = flashClust(as.dist(dissimilarity.TOM), method = "average")
 
-    min.module.size <- 50
-    #Identify modules using dynamic tree cutting with hybrid clustering
-    dynamic.modules <- cutreeDynamic(dendro = geneTree, method = "hybrid", distM = dissimilarity.TOM, cutHeight = 0.995, deepSplit = 2, pamRespectsDendro = FALSE, minClusterSize = min.module.size, verbose = 2)
-    dynamic.colors <- labels2colors(dynamic.modules)
-    saveRDS.gz(dynamic.colors, file = "./save/dynamic.colors.rda")
+CairoPDF("./genecluster", height = 10, width = 15)
+plot(geneTree, xlab = "", sub = "", main = "Gene clustering on TOM-based dissimilarity", labels = FALSE, hang = 0.04)
+dev.off()
 
-    CairoPDF(paste("./gene_dendrogram_and_module_colors_min50", status, sep = "_"), height = 10, width = 15)
-    plotDendroAndColors(geneTree, dynamic.colors, "Dynamic Tree Cut", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05)
-    dev.off()
+min.module.size <- 20
+#Identify modules using dynamic tree cutting with hybrid clustering
+dynamic.modules <- cutreeDynamic(dendro = geneTree, method = "hybrid", distM = dissimilarity.TOM, cutHeight = 0.995, pamRespectsDendro = FALSE, minClusterSize = min.module.size, verbose = 2)
+dynamic.colors <- labels2colors(dynamic.modules)
+saveRDS.gz(dynamic.colors, file = "./save/dynamic.colors.rda")
 
-    #Calculate module eigengenes
-    ME.list <- moduleEigengenes(mi.expr, colors = dynamic.colors, softPower = softPower, nPC = 1)
-    ME.genes <- ME.list$eigengenes
-    MEDiss <- 1 - cor(ME.genes)
-    METree <- flashClust(as.dist(MEDiss), method = "average")
-    saveRDS.gz(METree, file = "./save/me.tree.rda")
+CairoPDF("./gene_dendrogram_and_module_colors_min50", height = 10, width = 15)
+plotDendroAndColors(geneTree, dynamic.colors, "Dynamic Tree Cut", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05)
+dev.off()
 
-    CairoPDF(paste("./module_eigengene_clustering_min50", status, sep = "_"), height = 10, width = 15)
-    plot(METree, xlab = "", sub = "", main = "")
-    dev.off()
+#Calculate module eigengenes
+#ME.list <- moduleEigengenes(mi.expr, colors = dynamic.colors, softPower = softPower, nPC = 1)
+#ME.genes <- ME.list$eigengenes
+#MEDiss <- 1 - cor(ME.genes)
+#METree <- flashClust(as.dist(MEDiss), method = "average")
+#saveRDS.gz(METree, file = "./save/me.tree.rda")
 
-    ##Check if any modules are too similar and merge them.  Possibly not working.
-    #ME.dissimilarity.threshold <- 0.20
-    #merge.all <- mergeCloseModules(mi.expr, dynamic.colors, cutHeight = ME.dissimilarity.threshold, verbose = 3) #PC analysis may be failing because of Intel MKL Lapack routine bug.  Test with openBLAS in R compiled with gcc.
-    #merged.colors <- merge.all$colors
-    #merged.genes <- merge.all$newMEs
+#CairoPDF(paste("./module_eigengene_clustering_min50", status, sep = "_"), height = 10, width = 15)
+#plot(METree, xlab = "", sub = "", main = "")
+#dev.off()
 
-    #CairoPDF(paste("module_eigengene_clustering_min50", status, sep = "_"), height = 10, width = 15)
-    #plotDendroAndColors(geneTree, cbind(dynamic.colors, merged.colors), c("Dynamic Tree Cut", "Merged dynamic"), dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "")
-    #dev.off()
+##Check if any modules are too similar and merge them.  Possibly not working.
+#ME.dissimilarity.threshold <- 0.20
+#merge.all <- mergeCloseModules(mi.expr, dynamic.colors, cutHeight = ME.dissimilarity.threshold, verbose = 3) #PC analysis may be failing because of Intel MKL Lapack routine bug.  Test with openBLAS in R compiled with gcc.
+#merged.colors <- merge.all$colors
+#merged.genes <- merge.all$newMEs
 
-    #Use merged eigengenes 
-    #module.colors <- merged.colors
-    #saveRDS.gz(module.colors, file = "./save/module.colors.rda")
-    #color.order <- c("grey", standardColors(50))
-    #modules.labels <- match(module.colors, color.order)
-    #saveRDS.gz(modules.labels, file = "./save/modules.labels.rda")
-    #ME.genes <- merged.genes
-    #saveRDS.gz(ME.genes, file = "./save/me.genes.rda")
+#CairoPDF(paste("module_eigengene_clustering_min50", status, sep = "_"), height = 10, width = 15)
+#plotDendroAndColors(geneTree, cbind(dynamic.colors, merged.colors), c("Dynamic Tree Cut", "Merged dynamic"), dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "")
+#dev.off()
 
-    #all.degrees <- intramodularConnectivity(adjacency.PEER, module.colors)
-    #fdata <- featureData(lumi.import)@data
-    #colnames(fdata) %<>% tolower %>% capitalize
-    #gene.info.join <- data.frame(nuID = featureNames(lumi.import), select(fdata, Accession, Symbol, Definition))
-    #gene.info <- mutate(gene.info.join, module.colors = module.colors, mean.count = apply(expr.data.PEER, 2, mean)) %>% data.frame(all.degrees)
+#Use merged eigengenes 
+#module.colors <- merged.colors
+#saveRDS.gz(module.colors, file = "./save/module.colors.rda")
+#color.order <- c("grey", standardColors(50))
+#modules.labels <- match(module.colors, color.order)
+#saveRDS.gz(modules.labels, file = "./save/modules.labels.rda")
+#ME.genes <- merged.genes
+#saveRDS.gz(ME.genes, file = "./save/me.genes.rda")
 
-    #CairoPDF(paste("eigengenes", status, sep = "_"), height = 10, width = 18)
-    #par(cex = 0.7)
-    #plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
-    #dev.off()
+#all.degrees <- intramodularConnectivity(adjacency.PEER, module.colors)
+#fdata <- featureData(lumi.import)@data
+#colnames(fdata) %<>% tolower %>% capitalize
+#gene.info.join <- data.frame(nuID = featureNames(lumi.import), select(fdata, Accession, Symbol, Definition))
+#gene.info <- mutate(gene.info.join, module.colors = module.colors, mean.count = apply(expr.data.PEER, 2, mean)) %>% data.frame(all.degrees)
 
-    symbol.vector <- mi.expr.df$Symbol %>% str_replace("\\.", "\\-")
-    module.expr.out <- data.frame(Symbol = symbol.vector, module.color = dynamic.colors)
-    write.xlsx(module.expr.out, paste("./module", status, "xlsx", sep = "."))
-    return(module.expr.out)
-}
+#CairoPDF(paste("eigengenes", status, sep = "_"), height = 10, width = 18)
+#par(cex = 0.7)
+#plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
+#dev.off()
+
+symbol.vector <- rownames(mi.expr) %>% str_replace("\\.", "\\-")
+module.expr.out <- data.frame(Symbol = symbol.vector, module.color = dynamic.colors)
+write.xlsx(module.expr.out, "./module_status.xlsx", sep = ".")
+return(module.expr.out)
+
 
 mi.networks <- lapply(names(genes), gen.mi, intensities.means, genes)
 mi.network <- gen.mi("Patient", intensities.means, genes)
+
 #names(mi.networks) <- names(genes.list)
 #saveRDS.gz(mi.networks, file = "./save/mi.networks.rda")
 
-module.patients <- read.xlsx("./module.Patient.xlsx")
+module.patients <- read.xlsx("./module_status.xlsx")
 module.symbols <- split(module.patients, factor(module.patients$module.color))
 
 source("../../code/GO/enrichr.R")
@@ -206,12 +206,51 @@ enrichr.wkbk <- function(subindex, full.df, index)
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
-trap1 <- map(names(module.symbols), enrichr.submit, module.symbols, enrichr.terms, FALSE)
+enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "WikiPathways_2016", "Reactome_2016", "BioCarta_2016", "PPI_Hub_Proteins", "Humancyc_2016", "NCI-Nature_2016", "Panther_2016") 
+
+trap1 <- map(names(module.symbols)[-c(1:3)], enrichr.submit, module.symbols, enrichr.terms, FALSE)
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()
 unlist(test) %>% sort
+
+blue.biol <- read.xlsx("./enrichr/blue/blue_GO_Biological_Process_2015.xlsx")
+black.biol <- read.xlsx("./enrichr/black/black_GO_Biological_Process_2015.xlsx")
+brown.biol <- read.xlsx("./enrichr/brown/brown_GO_Biological_Process_2015.xlsx")
+green.biol <- read.xlsx("./enrichr/green/green_GO_Biological_Process_2015.xlsx")
+red.biol <- read.xlsx("./enrichr/red/red_GO_Biological_Process_2015.xlsx")
+turquoise.biol <- read.xlsx("./enrichr/turquoise/turquoise_GO_Biological_Process_2015.xlsx")
+yellow.biol <- read.xlsx("./enrichr/yellow/yellow_GO_Biological_Process_2015.xlsx")
+
+blue.expression <- blue.biol[27,]$Genes %>% str_split(",") %>% getElement(1) 
+blue.expr.clean <- blue.expression[!str_detect(blue.expression, "RPS|RPL")]
+
+black.expression <- black.biol[36,]$Genes %>% str_split(",") %>% getElement(1) 
+black.expr.clean <- black.expression[!str_detect(black.expression, "RPS|RPL")]
+
+brown.expression <- brown.biol[354,]$Genes %>% str_split(",") %>% getElement(1) 
+brown.expr.clean <- brown.expression[!str_detect(brown.expression, "RPS|RPL")]
+brown.epigenetic <- brown.biol[33,]$Genes %>% str_split(",") %>% getElement(1) 
+brown.epigenetic.clean <- brown.epigenetic[!str_detect(brown.epigenetic, "RPS|RPL")]
+brown.all <- c(brown.expr.clean, brown.epigenetic.clean) %>% unique
+
+red.expression <- red.biol[40,]$Genes %>% str_split(",") %>% getElement(1) 
+red.expr.clean <- red.expression[!str_detect(red.expression, "RPS|RPL")]
+red.posttranscript <- red.biol[251,]$Genes %>% str_split(",") %>% getElement(1) 
+red.trans.clean <- red.posttranscript[!str_detect(red.posttranscript, "RPS|RPL")]
+red.all <- c(red.expr.clean, red.trans.clean) %>% unique
+
+turquoise.expression <- turquoise.biol[20,]$Genes %>% str_split(",") %>% getElement(1) 
+turquoise.expr.clean <- turquoise.expression[!str_detect(turquoise.expression, "RPS|RPL")]
+turquoise.posttranscript <- turquoise.biol[120,]$Genes %>% str_split(",") %>% getElement(1) 
+turquoise.trans.clean <- turquoise.posttranscript[!str_detect(turquoise.posttranscript, "RPS|RPL")]
+turquoise.all <- c(turquoise.expr.clean, turquoise.trans.clean) %>% unique
+
+yellow.expression <- yellow.biol[207,]$Genes %>% str_split(",") %>% getElement(1) 
+yellow.expr.clean <- yellow.expression[!str_detect(yellow.expression, "RPS|RPL")]
+yellow.posttranscript <- yellow.biol[325,]$Genes %>% str_split(",") %>% getElement(1) 
+yellow.trans.clean <- yellow.posttranscript[!str_detect(yellow.posttranscript, "RPS|RPL")]
+yellow.all <- c(yellow.expr.clean, yellow.trans.clean) %>% unique
 
 #blue GO
 blue.molec <- read.xlsx("./enrichr/blue/blue_GO_Molecular_Function.xlsx") %>% slice(1)

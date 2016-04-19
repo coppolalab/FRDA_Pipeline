@@ -5,10 +5,8 @@ enableWGCNAThreads()
 gen.cor <- function(dataset, trait.df)
 {
     dataset %<>% mutate(Sample.Name = rownames(dataset))
-    sample.key <- paste(trait.df$Sample.Name, collapse = "|")
-    dataset.reduce <- filter(dataset, grepl(sample.key, Sample.Name))
-    module.trait.cor <- cor(select(dataset.reduce, -Sample.Name), select(trait.df, -Sample.Name), use = "p")
-    module.trait.cor.pval <- corPvalueStudent(module.trait.cor, nrow(dataset.reduce))
+    module.trait.cor <- bicor(select(dataset, -Sample.Name), select(trait.df, -Sample.Name), maxPOutliers = 0.05)
+    module.trait.cor.pval <- corPvalueStudent(module.trait.cor, nrow(dataset))
     colnames(module.trait.cor.pval) %<>% paste(".p.value", sep = "") 
     return(cbind(module.trait.cor, module.trait.cor.pval))
 }

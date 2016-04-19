@@ -16,6 +16,9 @@ library(abind)
 library(lumi)
 library(lumiHumanAll.db)
 library(annotate)
+library(WGCNA)
+library(sva)
+library(limma)
 
 #Longitudinal Analysis
 library(fastICA)
@@ -32,6 +35,8 @@ library(plyr)
 library(dplyr)
 library(tidyr)
 library(doBy)
+
+match.exact <- mkchain(map_chr(paste %<<<% "^" %<<% c("$", sep = "")), paste(collapse = "|"))
 
 saveRDS.gz <- function(object,file,threads=parallel::detectCores()) {
   con <- pipe(paste0("pigz -p",threads," > ",file),"wb")
@@ -200,15 +205,159 @@ collapse.ica <- function(subset.key, ica.list)
     return(ica.cast)
 }
 
-intensities.means <- readRDS.gz("../dtw/save/intensities.means.rda")
+gen.connectivityplot <- function(filename, dataset, maintitle)
+{
+    norm.adj <- (0.5 + 0.5 * bicor(exprs(dataset)))
+    colnames(norm.adj) <- dataset$Sample.Name
+    rownames(norm.adj) <- dataset$Sample.Name
+    net.summary <- fundamentalNetworkConcepts(norm.adj)
+    net.connectivity <- net.summary$Connectivity
+    connectivity.zscore <- (net.connectivity - mean(net.connectivity)) / sqrt(var(net.connectivity))
 
-ica.all <- seed.ICA(intensities.means)
+    connectivity.plot <- data.frame(Sample.Name = names(connectivity.zscore), Z.score = connectivity.zscore, Sample.Num = 1:length(connectivity.zscore))
+    p <- ggplot(connectivity.plot, aes(x = Sample.Num, y = Z.score, label = Sample.Name) )
+    p <- p + geom_text(size = 4, colour = "red")
+    p <- p + geom_hline(aes(yintercept = -2)) + geom_hline(yintercept = -3) 
+    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    p <- p + xlab("Sample Number") + ylab("Z score") + ggtitle(maintitle)
+    CairoPDF(filename, width = 10, height = 10)
+    print(p)
+    dev.off()
+    return(connectivity.zscore)
+}
+
+gen.enrichrplot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8)
+{
+    enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+    enrichr.df$Log.pvalue <- -(log10(enrichr.df$P.value))
+    enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% str_replace_all("\\_.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
+    enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
+    enrichr.df %<>% arrange(Log.pvalue)
+    enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
+    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+    p <- ggplot(enrichr.df.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = enrichr.df$Format.Name, hjust = "left", aes(y = 0.1)) + coord_flip() + theme_bw() + theme(legend.position = "none")
+    p <- p + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+    CairoPDF(filename, height = plot.height, width = plot.width)
+    print(p)
+    dev.off()
+}
+
+lumi.four <- readRDS.gz('../dtw/save/lumi.four.rda')
+lumi.patient <- lumi.four[,lumi.four$Status == "Patient"]
+lumi.norm <- lumiN(lumi.patient, method = "rsn")
+lumi.qual <- lumiQ(lumi.norm, detectionTh = 0.01)
+
+lumi.cutoff <- detectionCall(lumi.qual)
+lumi.expr <- lumi.qual[which(lumi.cutoff > 0),]
+symbols.lumi <- getSYMBOL(rownames(lumi.expr), 'lumiHumanAll.db') %>% is.na
+lumi.expr.annot <- lumi.expr[!symbols.lumi,] #Drop any probe which is not annotated
+saveRDS.gz(lumi.expr.annot, file = "./save/lumi.expr.annot.rda")
+
+qcsum <- lumi.expr.annot@QC$sampleSummary %>% t %>% data.frame
+colnames(qcsum) %<>% str_replace("\\.0\\.01\\.", "")
+qcsum$Sample.Name <- rownames(qcsum)
+qcsum$RIN <- lumi.expr.annot$RIN
+qcsum$Sample.Num <- lumi.expr.annot$Sample.Num
+qcsum %<>% arrange(distance.to.sample.mean)
+
+qcsum.remove <- filter(qcsum, distance.to.sample.mean > 70)$Sample.Name #%>% paste(collapse = "|")
+
+connectivity.zscore <- gen.connectivityplot("connectivity", lumi.expr.annot, "")
+connectivity.remove <- connectivity.zscore[abs(connectivity.zscore) > 2] %>% names
+
+combined.remove <- c(qcsum.remove, connectivity.remove) %>% unique %>% paste(collapse = "|")
+remove.indices <- grepl(combined.remove, sampleNames(lumi.expr.annot))
+
+lumi.rmout <- lumi.patient[,!remove.indices]
+lumi.rmout.norm <- lumiN(lumi.rmout, method = "rsn") #Normalize with robust spline regression
+lumi.rmout.qual <- lumiQ(lumi.rmout.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
+lumi.rmout.cutoff <- detectionCall(lumi.rmout.qual) #Get the count of probes which passed the detection threshold per sample
+lumi.rmout.expr <- lumi.rmout.qual[which(lumi.rmout.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
+symbols.lumi.rmout <- getSYMBOL(rownames(lumi.rmout.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
+lumi.rmout.annot <- lumi.rmout.expr[!symbols.lumi.rmout,] #Drop any probe which is not annotated
+saveRDS.gz(lumi.rmout.annot, file = "./save/lumi.rmout.annot.rda")
+
+qcsum.rmout <- lumi.rmout.annot@QC$sampleSummary %>% t %>% data.frame
+colnames(qcsum.rmout) %<>% str_replace("\\.0\\.01\\.", "")
+qcsum.rmout$Sample.Name <- rownames(qcsum.rmout)
+qcsum.rmout$RIN <- lumi.rmout.annot$RIN
+qcsum.rmout$Sample.Num <- lumi.rmout.annot$Sample.Num
+qcsum.rmout$PIDN <- lumi.rmout.annot$PIDN
+arrange(qcsum.rmout, distance.to.sample.mean)
+
+PIDNs <- filter(qcsum.rmout, Sample.Num == "1r")$PIDN 
+orig <- filter(qcsum.rmout, PIDN %in% PIDNs & Sample.Num == "1")$distance.to.sample.mean
+orig.names <- filter(qcsum.rmout, PIDN %in% PIDNs & Sample.Num == "1")$Sample.Name
+reps <- filter(qcsum.rmout, PIDN %in% PIDNs & Sample.Num == "1r")$distance.to.sample.mean
+reps.names <- filter(qcsum.rmout, PIDN %in% PIDNs & Sample.Num == "1r")$Sample.Name
+reps.final <- data.frame(orig, reps)
+max.key <- apply(reps.final, 1, which.max)
+reps.names <- data.frame(orig.names, reps.names)
+
+remove.names <- reps.names[cbind(seq_along(max.key), max.key)]
+remove.key <- paste(remove.names, collapse = "|")
+reps.samples <- grepl(remove.key, sampleNames(lumi.patient))
+remove.all <- remove.indices | reps.samples
+saveRDS.gz(remove.all, "./save/remove.all.rda")
+
+lumi.rmreps <- lumi.patient[,!remove.all]
+saveRDS.gz(lumi.rmreps, "./save/lumi.rmreps.rda")
+
+PIDN.long <- filter(pData(lumi.rmreps), Sample.Num == "4")$PIDN 
+lumi.rmreps$Sample.Num[lumi.rmreps$Sample.Num == "1r"] <- 1
+lumi.rmreps$Sample.Num %<>% as.character %>% as.numeric
+
+targets.rmreps <- filter(pData(lumi.rmreps), PIDN %in% PIDN.long) 
+targets.nums <- by(targets.rmreps, targets.rmreps$PIDN, nrow) %>% as.list %>% melt %>% data.frame 
+missing.PIDNs <- filter(targets.nums, value < 4)$L1 
+targets.final <- filter(targets.rmreps, !grepl(match.exact(missing.PIDNs), PIDN))
+rmreps.index <- sampleNames(lumi.rmreps) %in% targets.final$Sample.Name 
+lumi.rmreps <- lumi.rmreps[,rmreps.index]
+onebatch.pidn <- filter(pData(lumi.rmreps), Batch == 5)$PIDN
+lumi.rmreps <- lumi.rmreps[,lumi.rmreps$PIDN != onebatch.pidn]
+
+lumi.rmreps.norm <- lumiN(lumi.rmreps, method = "rsn") #Normalize with robust spline regression
+lumi.rmreps.qual <- lumiQ(lumi.rmreps.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
+lumi.rmreps.cutoff <- detectionCall(lumi.rmreps.qual) #Get the count of probes which passed the detection threshold per sample
+lumi.rmreps.expr <- lumi.rmreps.qual[which(lumi.rmreps.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
+symbols.lumi.rmreps <- getSYMBOL(rownames(lumi.rmreps.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
+lumi.rmreps.annot <- lumi.rmreps.expr[!symbols.lumi.rmreps,] #Drop any probe which is not annotated
+saveRDS.gz(lumi.rmreps.annot, file = "./save/lumi.rmreps.annot.rda")
+
+model.sex <- model.matrix( ~ 0 + factor(lumi.rmreps.annot$Sex) )
+colnames(model.sex) <- c("Female", "Male")
+model.sex.reduce <- model.sex[,-1]
+
+model.combat <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.rmreps.annot$Draw.Age), RIN = lumi.rmreps.annot$RIN)
+
+expr.combat <- ComBat(dat = exprs(lumi.rmreps.annot), batch = factor(lumi.rmreps.annot$Batch), mod = model.combat)
+lumi.combat <- lumi.rmreps.annot
+exprs(lumi.combat) <- expr.combat
+saveRDS.gz(lumi.combat, "./save/lumi.combat")
+
+model.cov <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.combat$Draw.Age), RIN = lumi.combat$RIN)
+#model.full.cov <- cbind(model.cov, model.PEER_covariate)
+export.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.cov)
+export.lumi <- lumi.combat
+exprs(export.lumi) <- export.expr
+saveRDS.gz(export.lumi, file = "./save/export.lumi.rda")
+
+lumi.collapse.expr <- collapseRows(exprs(export.lumi), getSYMBOL(featureNames(export.lumi), 'lumiHumanAll.db'), rownames(export.lumi))
+lumi.collapse <- ExpressionSet(assayData = lumi.collapse.expr$datETcollapsed, phenoData = phenoData(export.lumi))
+saveRDS.gz(lumi.collapse, './save/lumi.collapse.rda')
+
+expr.means <- collapseRows(t(exprs(lumi.collapse)), lumi.collapse$Sample.Num, lumi.collapse$Sample.Name, method = "function", methodFunction = colMeans)$datETcollapsed %>% t
+saveRDS.gz(expr.means, "./save/expr.means.rda")
+
+ica.all <- seed.ICA(list(Patient = expr.means))
 saveRDS.gz(ica.all, "./save/ica.all.rda")
 #ica.patient <- ica.all[str_detect(names(ica.all), "Patient")]
 #ica.melt <- melt(ica.patient)
 #ica.snca <- filter(ica.melt, Symbol == "MMP9")
 #snca.means <- by(ica.snca, factor(ica.snca$variable), select, value) %>% map(Compose(abs, median))
 
+#names(ica.all) <- "Patient"
 ica.split <- map(unique(names(ica.all)), collapse.ica, ica.all)
 names(ica.split) <- unique(names(ica.all))
 
@@ -216,48 +365,38 @@ names(ica.split) <- unique(names(ica.all))
 intensities.ica <- map(ica.split, gen.ica)
 
 intensities.ica.genes <- map(intensities.ica, apply, 1, which.max) %>% map(split.ica)
+test.name <- intensities.ica.genes$Patient %>% map(select, Symbol) %>% map(Compose(unlist, as.character)) %>% reduce(c) 
 
-#l_ply(names(intensities.ica.genes), gen.icatables, intensities.ica.genes, "ica.mean")
+l_ply(names(intensities.ica.genes), gen.icatables, intensities.ica.genes, "ica.mean")
 
 source("../../code/GO/enrichr.R")
-enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
-
+enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "WikiPathways_2016", "Reactome_2016", "BioCarta_2016", "PPI_Hub_Proteins", "Humancyc_2016", "NCI-Nature_2016", "Panther_2016") 
 map(names(intensities.ica.genes), enrichr.ica, intensities.ica.genes, enrichr.terms, "intensities.mean")
 map(names(intensities.ica.genes), stringdb.ica, intensities.ica.genes, "means")
 saveRDS.gz(intensities.ica.genes, "./save/intensities.ica.genes.rda")
 
 #X1 GO
-X1.biol <- read.xlsx("./enrichr/intensities.mean/Patient/X1/GO_Biological_Process.xlsx") %>% slice(2)
+X1.biol <- read.xlsx("./enrichr/intensities.mean/Patient/X1/GO_Biological_Process_2015.xlsx") %>% slice(c(2, 18))
 X1.biol$Database <- "GO Biological Process"
-X1.reactome <- read.xlsx("./enrichr/intensities.mean/Patient/X1/Reactome_2015.xlsx") %>% slice(c(21,27))
+X1.molec <- read.xlsx("./enrichr/intensities.mean/Patient/X1/GO_Molecular_Function_2015.xlsx") %>% slice(c(5, 6))
+X1.molec$Database <- "GO Molecular Function"
+X1.reactome <- read.xlsx("./enrichr/intensities.mean/Patient/X1/Reactome_2016.xlsx") %>% slice(1)
 X1.reactome$Database <- "Reactome"
-X1.enrichr <- rbind(X1.biol, X1.reactome)
-X1.enrichr$Gene.Count <- map(X1.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-X1.enrichr$Log.pvalue <- -(log10(X1.enrichr$P.value))
+X1.enrichr <- rbind(X1.biol, X1.molec, X1.reactome)
 
-X1.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
-X1.enrichr$Format.Name <- paste(X1.enrichr$Database, ": ", X1.enrichr$GO.Term, " (", X1.enrichr$Gene.Count, ")", sep = "")
-X1.enrichr.plot <- select(X1.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+gen.enrichrplot(X1.enrichr, "X1.enrichr")
 
-p <- ggplot(X1.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = X1.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
-p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-CairoPDF("X1.enrichr", height = 5, width = 8)
-print(p)
-dev.off()
+#X3 GO
+X3.biol <- read.xlsx("./enrichr/intensities.mean/Patient/X3/GO_Biological_Process_2015.xlsx") %>% slice(c(58,61))
+X3.biol$Database <- "GO Biological Process"
+X3.molec <- read.xlsx("./enrichr/intensities.mean/Patient/X3/GO_Molecular_Function_2015.xlsx") %>% slice(8)
+X3.molec$Database <- "GO Molecular Function"
+X3.reactome <- read.xlsx("./enrichr/intensities.mean/Patient/X3/Reactome_2016.xlsx") %>% slice(36)
+X3.reactome$Database <- "Reactome"
+X3.enrichr <- rbind(X3.biol, X3.molec, X3.reactome)
 
-#X4 GO
-X4.reactome <- read.xlsx("./enrichr/intensities.mean/Patient/X4/Reactome_2015.xlsx") %>% slice(c(5,42,43))
-X4.reactome$Database <- "Reactome"
-X4.enrichr <- X4.reactome
-X4.enrichr$Gene.Count <- map(X4.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-X4.enrichr$Log.pvalue <- -(log10(X4.enrichr$P.value))
+gen.enrichrplot(X3.enrichr, "X3.enrichr")
 
-X4.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
-X4.enrichr$Format.Name <- paste(X4.enrichr$Database, ": ", X4.enrichr$GO.Term, " (", X4.enrichr$Gene.Count, ")", sep = "")
-X4.enrichr.plot <- select(X4.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+ica.X1 <- match.exact(intensities.ica.genes$Patient$X1$Symbol)
 
-p <- ggplot(X4.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = X4.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
-p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-CairoPDF("X4.enrichr", height = 5, width = 8)
-print(p)
-dev.off()
+intensities.X1 <- expr.means[grepl(ica.X1, rownames(expr.means)), ]

@@ -146,6 +146,27 @@ enrichr.wkbk <- function(subindex, full.df, new.fullpath)
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
+gen.connectivityplot <- function(filename, dataset, maintitle)
+{
+    norm.adj <- (0.5 + 0.5 * bicor(exprs(dataset)))
+    colnames(norm.adj) <- dataset$Sample.Name
+    rownames(norm.adj) <- dataset$Sample.Name
+    net.summary <- fundamentalNetworkConcepts(norm.adj)
+    net.connectivity <- net.summary$Connectivity
+    connectivity.zscore <- (net.connectivity - mean(net.connectivity)) / sqrt(var(net.connectivity))
+
+    connectivity.plot <- data.frame(Sample.Name = names(connectivity.zscore), Z.score = connectivity.zscore, Sample.Num = 1:length(connectivity.zscore))
+    p <- ggplot(connectivity.plot, aes(x = Sample.Num, y = Z.score, label = Sample.Name) )
+    p <- p + geom_text(size = 4, colour = "red")
+    p <- p + geom_hline(aes(yintercept = -2)) + geom_hline(yintercept = -3) 
+    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    p <- p + xlab("Sample Number") + ylab("Z score") + ggtitle(maintitle)
+    CairoPDF(filename, width = 10, height = 10)
+    print(p)
+    dev.off()
+    return(connectivity.zscore)
+}
+
 lumi.known <- readRDS.gz("../baseline_lumi/save/lumi.known.rda")
 lumi.vst <- lumiT(lumi.known)
 
@@ -153,7 +174,19 @@ long.key <- grepl("^1$|1r|2|3|4", lumi.vst$Sample.Num)
 lumi.long <- lumi.vst[,long.key]
 saveRDS.gz(lumi.long, file = "./save/lumi.long.rda")
 
-lumi.norm <- lumiN(lumi.long, method = "rsn")
+PIDN.long <- filter(pData(lumi.long), Sample.Num == "4")$PIDN 
+#lumi.long$Sample.Num[lumi.long$Sample.Num == "1r"] <- 1
+#lumi.long$Sample.Num %<>% as.character %>% as.numeric
+
+targets.long <- filter(pData(lumi.long), PIDN %in% PIDN.long) 
+targets.nums <- by(targets.long, targets.long$PIDN, nrow) %>% as.list %>% melt %>% data.frame 
+#missing.PIDNs <- filter(targets.nums, value < 4)$L1 
+#targets.final <- filter(targets.long, !grepl(match.exact(missing.PIDNs), PIDN))
+#long.index <- sampleNames(lumi.long) %in% targets.final$Sample.Name 
+
+lumi.four <- lumi.long[,lumi.long$PIDN %in% PIDN.long]
+
+lumi.norm <- lumiN(lumi.four, method = "rsn")
 lumi.qual <- lumiQ(lumi.norm, detectionTh = 0.01)
 
 lumi.cutoff <- detectionCall(lumi.qual)
@@ -169,9 +202,15 @@ qcsum$RIN <- lumi.expr.annot$RIN
 qcsum$Sample.Num <- lumi.expr.annot$Sample.Num
 qcsum %<>% arrange(distance.to.sample.mean)
 
-qcsum.remove <- filter(qcsum, distance.to.sample.mean > 70)$Sample.Name %>% paste(collapse = "|")
-remove.indices <- grepl(qcsum.remove, sampleNames(lumi.expr.annot))
-lumi.rmout <- lumi.long[,!remove.indices]
+qcsum.remove <- filter(qcsum, distance.to.sample.mean > 70)$Sample.Name #%>% paste(collapse = "|")
+
+connectivity.zscore <- gen.connectivityplot("connectivity", lumi.expr.annot, "")
+connectivity.remove <- connectivity.zscore[abs(connectivity.zscore) > 3] %>% names
+
+combined.remove <- c(qcsum.remove, connectivity.remove) %>% unique %>% paste(collapse = "|")
+remove.indices <- grepl(combined.remove, sampleNames(lumi.expr.annot))
+
+lumi.rmout <- lumi.four[,!remove.indices]
 lumi.rmout.norm <- lumiN(lumi.rmout, method = "rsn") #Normalize with robust spline regression
 lumi.rmout.qual <- lumiQ(lumi.rmout.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
 lumi.rmout.cutoff <- detectionCall(lumi.rmout.qual) #Get the count of probes which passed the detection threshold per sample
@@ -199,17 +238,29 @@ reps.names <- data.frame(orig.names, reps.names)
 
 remove.names <- reps.names[cbind(seq_along(max.key), max.key)]
 remove.key <- paste(remove.names, collapse = "|")
-reps.samples <- grepl(remove.key, sampleNames(lumi.long))
+reps.samples <- grepl(remove.key, sampleNames(lumi.four))
 remove.all <- remove.indices | reps.samples
 saveRDS.gz(remove.all, "./save/remove.all.rda")
 
-lumi.rmreps <- lumi.long[,!remove.all]
-lumi.baseline <- lumi.rmreps[,lumi.rmreps$Sample.Num == "1"]
+lumi.rmreps <- lumi.four[,!remove.all]
+
+PIDN.long <- filter(pData(lumi.rmreps), Sample.Num == "4")$PIDN 
+lumi.rmreps$Sample.Num[lumi.rmreps$Sample.Num == "1r"] <- 1
+lumi.rmreps$Sample.Num %<>% as.character %>% as.numeric
+
+targets.rmreps <- filter(pData(lumi.rmreps), PIDN %in% PIDN.long) 
+targets.nums <- by(targets.rmreps, targets.rmreps$PIDN, nrow) %>% as.list %>% melt %>% data.frame 
+missing.PIDNs <- filter(targets.nums, value < 4)$L1 
+targets.final <- filter(targets.rmreps, !grepl(match.exact(missing.PIDNs), PIDN))
+rmreps.index <- sampleNames(lumi.rmreps) %in% targets.final$Sample.Name 
+onebatch.pidn <- filter(pData(lumi.rmreps), Batch == 5)$PIDN
+lumi.rmreps <- lumi.rmreps[,rmreps.index]
+lumi.rmreps <- lumi.rmreps[,lumi.rmreps$PIDN != onebatch.pidn]
 
 lumi.rmreps.norm <- lumiN(lumi.rmreps, method = "rsn") #Normalize with robust spline regression
-#lumi.rmreps.qual <- lumiQ(lumi.rmreps.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
-lumi.rmreps.cutoff <- detectionCall(lumi.rmreps.norm) #Get the count of probes which passed the detection threshold per sample
-lumi.rmreps.expr <- lumi.rmreps.norm[which(lumi.rmreps.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
+lumi.rmreps.qual <- lumiQ(lumi.rmreps.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
+lumi.rmreps.cutoff <- detectionCall(lumi.rmreps.qual) #Get the count of probes which passed the detection threshold per sample
+lumi.rmreps.expr <- lumi.rmreps.qual[which(lumi.rmreps.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
 symbols.lumi.rmreps <- getSYMBOL(rownames(lumi.rmreps.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
 lumi.rmreps.annot <- lumi.rmreps.expr[!symbols.lumi.rmreps,] #Drop any probe which is not annotated
 saveRDS.gz(lumi.rmreps.annot, file = "./save/lumi.rmreps.annot.rda")
@@ -231,43 +282,43 @@ saveRDS.gz(lumi.combat, "./save/lumi.combat")
 
 source("../common_functions.R")
 
-gen.peer(8, exprs(lumi.combat), TRUE, model.combat)
-model.PEER_covariate <- read_csv("./factor_8.csv") %>% select(-(X1:X6))
-rownames(model.PEER_covariate) <- colnames(lumi.combat)
-colnames(model.PEER_covariate) <- paste("X", 1:ncol(model.PEER_covariate), sep = "")
+#gen.peer(8, exprs(lumi.combat), TRUE, model.combat)
+#model.PEER_covariate <- read_csv("./factor_8.csv") %>% select(-(X1:X6))
+#rownames(model.PEER_covariate) <- colnames(lumi.combat)
+#colnames(model.PEER_covariate) <- paste("X", 1:ncol(model.PEER_covariate), sep = "")
 
-targets1.gaa <- select(pData(lumi.combat), Sample.Name, GAA1) %>% filter(!is.na(GAA1))
-cor.gaa <- gen.cor(model.PEER_covariate, targets1.gaa)
+#targets1.gaa <- select(pData(lumi.combat), Sample.Name, GAA1) %>% filter(!is.na(GAA1))
+#cor.gaa <- gen.cor(model.PEER_covariate, targets1.gaa)
 
-targets1.onset <- select(pData(lumi.combat), Sample.Name, Onset) %>% filter(!is.na(Onset)) 
-cor.onset <- gen.cor(model.PEER_covariate, targets1.onset)
+#targets1.onset <- select(pData(lumi.combat), Sample.Name, Onset) %>% filter(!is.na(Onset)) 
+#cor.onset <- gen.cor(model.PEER_covariate, targets1.onset)
 
-PEER.traits.all <- cbind(cor.gaa, cor.onset) %>% data.frame
-PEER.traits.pval <- select(PEER.traits.all, contains("p.value")) %>% as.matrix
-PEER.traits.cor <- select(PEER.traits.all, -contains("p.value")) %>% as.matrix
+#PEER.traits.all <- cbind(cor.gaa, cor.onset) %>% data.frame
+#PEER.traits.pval <- select(PEER.traits.all, contains("p.value")) %>% as.matrix
+#PEER.traits.cor <- select(PEER.traits.all, -contains("p.value")) %>% as.matrix
 
-text.matrix.PEER <- paste(signif(PEER.traits.cor, 2), '\n(', signif(PEER.traits.pval, 1), ')', sep = '')
-dim(text.matrix.PEER) <- dim(PEER.traits.cor)
-gen.text.heatmap(PEER.traits.cor, text.matrix.PEER, colnames(PEER.traits.cor), rownames(PEER.traits.cor), "", "PEER factor-trait relationships")
+#text.matrix.PEER <- paste(signif(PEER.traits.cor, 2), '\n(', signif(PEER.traits.pval, 1), ')', sep = '')
+#dim(text.matrix.PEER) <- dim(PEER.traits.cor)
+#gen.text.heatmap(PEER.traits.cor, text.matrix.PEER, colnames(PEER.traits.cor), rownames(PEER.traits.cor), "", "PEER factor-trait relationships")
 
-PEER.trait.out <- data.frame(Factor = rownames(PEER.traits.cor), PEER.traits.cor, PEER.traits.pval)
-write_csv(PEER.trait.out, "PEER_trait_cor.csv")
+#PEER.trait.out <- data.frame(Factor = rownames(PEER.traits.cor), PEER.traits.cor, PEER.traits.pval)
+#write_csv(PEER.trait.out, "PEER_trait_cor.csv")
 
-PEER.weights <- read_csv("./weight_8.csv") %>% select(-(X1:X4))
-PEER.weights.sums <- colSums(abs(PEER.weights)) %>% data.frame
-PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums)
-colnames(PEER.weights.sums)[1] <- "Weight"
+#PEER.weights <- read_csv("./weight_8.csv") %>% select(-(X1:X4))
+#PEER.weights.sums <- colSums(abs(PEER.weights)) %>% data.frame
+#PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums)
+#colnames(PEER.weights.sums)[1] <- "Weight"
 
-p <- ggplot(PEER.weights.sums, aes(x = factor(Factor), y = as.numeric(Weight), group = 1)) + geom_line(color = "blue") 
-p <- p + theme_bw() + xlab("Factor") + ylab("Weight")
-CairoPDF("./PEER_weights", height = 4, width = 6)
-print(p)
-dev.off()
+#p <- ggplot(PEER.weights.sums, aes(x = factor(Factor), y = as.numeric(Weight), group = 1)) + geom_line(color = "blue") 
+#p <- p + theme_bw() + xlab("Factor") + ylab("Weight")
+#CairoPDF("./PEER_weights", height = 4, width = 6)
+#print(p)
+#dev.off()
 
 #Removing effects of covariates + PEER factors  !!DO NOT USE FOR LINEAR MODELING WITH CONTRASTS!!
 model.cov <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.combat$Draw.Age), RIN = lumi.combat$RIN)
-model.full.cov <- cbind(model.cov, model.PEER_covariate)
-export.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.full.cov)
+#model.full.cov <- cbind(model.cov, model.PEER_covariate)
+export.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.cov)
 export.lumi <- lumi.combat
 exprs(export.lumi) <- export.expr
 saveRDS.gz(export.lumi, file = "./save/export.lumi.rda")
@@ -275,30 +326,11 @@ saveRDS.gz(export.lumi, file = "./save/export.lumi.rda")
 batch.colors <- c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green", "blue4", "red4")
 gen.boxplot("baseline_intensity_corrected.jpg", export.lumi, batch.colors, "Covariate-corrected intensity", "Intensity")
 
-PIDN.long <- filter(pData(export.lumi), Sample.Num == "4")$PIDN 
-export.lumi$Sample.Num[export.lumi$Sample.Num == "1r"] <- 1
-export.lumi$Sample.Num %<>% as.character %>% as.numeric
-
-targets.long <- filter(pData(export.lumi), PIDN %in% PIDN.long) 
-targets.nums <- by(targets.long, targets.long$PIDN, nrow) %>% as.list %>% melt %>% data.frame 
-missing.PIDNs <- filter(targets.nums, value < 4)$L1 
-targets.final <- filter(targets.long, !grepl(paste("^", missing.PIDNs, "$", sep = ""), PIDN))
-long.index <- sampleNames(export.lumi) %in% targets.final$Sample.Name 
-
-lumi.final <- export.lumi[,long.index]
-fdata.first <- fData(lumi.final)
-fdata.first$nuID <- rownames(fdata.first)
-
-lumi.final <- lumi.final[!is.na(fdata.first$SYMBOL),]
-fdata <- fData(lumi.final)
-lumi.exprs <- exprs(lumi.final)
-lumi.collapse.expr <- collapseRows(lumi.exprs, factor(fdata$SYMBOL), rownames(lumi.exprs), method = "function", methodFunction = colMeans)
+lumi.collapse.expr <- collapseRows(exprs(lumi.final), getSYMBOL(featureNames(lumi.final), 'lumiHumanAll.db'), rownames(lumi.final), method = "function", methodFunction = colMeans)
 lumi.collapse <- ExpressionSet(assayData = lumi.collapse.expr$datETcollapsed, phenoData = phenoData(lumi.final))
-#lumi.exprs.collapse <- lumi.collapse$datETcollapsed %>% t
 
 saveRDS.gz(lumi.final, "./save/lumi.final.rda")
-saveRDS.gz(lumi.exprs.collapse, "./save/lumi.exprs.collapse.rda")
-saveRDS.gz(fdata, "./save/fdata.rda")
+saveRDS.gz(lumi.collapse, "./save/lumi.collapse.rda")
 
 #intensities.long <- data.frame(Sample.Num = lumi.final$Sample.Num, PIDN = lumi.final$PIDN, Status = lumi.final$Status, lumi.exprs.collapse) 
 #intensities.melt <- melt(intensities.long, id.vars = c("Sample.Num", "PIDN", "Status"))
@@ -330,7 +362,8 @@ get.stringdb(dtw.cc.submit, "cc.median", "cc")
 get.stringdb(dtw.pca.submit, "pca.median", "pca")
 get.stringdb(dtw.pco.submit, "pco.median", "pco")
 
-enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
+enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "WikiPathways_2016", "Reactome_2016", "BioCarta_2016", "PPI_Hub_Proteins", "Humancyc_2016", "NCI-Nature_2016", "Panther_2016") 
+
 dtw.cc.enrichr <- map(enrichr.terms, get.enrichrdata, dtw.cc.submit, FALSE)
 names(dtw.cc.enrichr) <- enrichr.terms
 map(names(dtw.cc.enrichr), enrichr.wkbk, dtw.cc.enrichr, "./enrichr/cc.median")
@@ -347,7 +380,7 @@ intensities.means <- by(t(exprs(lumi.collapse)), factor(lumi.collapse$Status), g
 saveRDS.gz(intensities.means, "./save/intensities.means.rda")
 intensities.dists.m <- gen.dtw(intensities.means) %>% reduce(cbind) %>% data.frame
 #test <- gen.dist(list(intensities.means$Carrier, intensities.means$Control))
-rownames(intensities.dists.m) <- colnames(lumi.exprs.collapse)
+#rownames(intensities.dists.m) <- colnames(lumi.exprs.collapse)
 colnames(intensities.dists.m) <- coltitles
 intensities.dists.m$Symbol <- rownames(intensities.dists.m)
 

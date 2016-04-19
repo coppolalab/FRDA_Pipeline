@@ -212,17 +212,18 @@ saveRDS.gz(lumi.final, "./save/lumi.final.rda")
 saveRDS.gz(lumi.exprs.collapse, "./save/lumi.exprs.collapse.rda")
 saveRDS.gz(fdata, "./save/fdata.rda")
 
-lumi.exprs.collapse <- readRDS.gz("./save/lumi.exprs.collapse.rda") %>% t
+lumi.exprs.collapse <- readRDS.gz("../dtw/save/lumi.collapse.rda")# %>% t
 #lumi.patient <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Pat")]
-lumi.patient <- lumi.exprs.collapse
+#lumi.patient <- lumi.exprs.collapse
+lumi.patient <- readRDS.gz("../ica/save/lumi.collapse.rda")
 
 patient.repgrp <- rep(1:(ncol(lumi.patient)/4), each = 4)
 patient.timegrp <- rep(1:4, (ncol(lumi.patient)/4))
-patient.out <- betr(lumi.patient, timepoint = pData(lumi.final)$Sample.Num, replicate = as.integer(factor(pData(lumi.final)$PIDN)), twoCondition = FALSE)
+patient.out <- betr(lumi.patient, timepoint = pData(lumi.patient)$Sample.Num, replicate = as.integer(factor(pData(lumi.patient)$PIDN)), twoCondition = FALSE)
 saveRDS.gz(patient.out, "./save/patient.out.rda")
 
 patient.genes <- data.frame(Symbol = names(patient.out), Probability = patient.out) %>% arrange(desc(Probability))
-write.xlsx(patient.genes[1:1206,], "./patient.out.xlsx")
+write.xlsx(patient.genes, "./patient.out.xlsx")
 
 lumi.carrier <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Car")]
 carrier.repgrp <- rep(1:(ncol(lumi.carrier)/4), each = 4)
@@ -250,7 +251,7 @@ pca.out <- betr(lumi.pca, cond = pca.condgrp, timepoint = pca.timegrp, replicate
 saveRDS.gz(pca.out, "./save/pca.out.rda")
 
 pca.genes <- data.frame(Symbol = names(pca.out), Probability = pca.out) %>% arrange(desc(Probability))
-write.xlsx(pca.genes[1:500,], "./pca.out.xlsx")
+write.xlsx(pca.genes, "./pca.out.xlsx")
 
 lumi.pco <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Pat|Con")]
 pco.repgrp <- rep(1:(ncol(lumi.pco)/4), each = 4)
@@ -259,8 +260,8 @@ pco.condgrp <- str_detect(colnames(lumi.pco), "Pat") %>% as.numeric
 pco.out <- betr(lumi.pco, cond = pco.condgrp, timepoint = pco.timegrp, replicate = pco.repgrp, twoCondition = TRUE)
 saveRDS.gz(pco.out, "./save/pco.out.rda")
 
-pco.genes <- data.frame(Symbol = names(pco.out), Probability = pca.out) %>% arrange(desc(Probability))
-write.xlsx(pco.genes[1:500,], "./pco.out.xlsx")
+pco.genes <- data.frame(Symbol = names(pco.out), Probability = pco.out) %>% arrange(desc(Probability))
+write.xlsx(pco.genes, "./pco.out.xlsx")
 
 lumi.cc <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Car|Con")]
 cc.repgrp <- rep(1:(ncol(lumi.cc)/4), each = 4)
@@ -270,7 +271,7 @@ cc.out <- betr(lumi.cc, cond = cc.condgrp, timepoint = cc.timegrp, replicate = c
 saveRDS.gz(cc.out, "./save/cc.out.rda")
 
 cc.genes <- data.frame(Symbol = names(cc.out), Probability = cc.out) %>% arrange(desc(Probability))
-write.xlsx(cc.genes[1:500,], "./cc.out.xlsx")
+write.xlsx(cc.genes, "./cc.out.xlsx")
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()

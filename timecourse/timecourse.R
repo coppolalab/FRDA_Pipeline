@@ -69,16 +69,17 @@ gen.boxplot <- function(filename, lumi.object, colorscheme, maintext, ylabtext)
     ggsave(filename = filename, plot = p, family = "Oxygen", width = 20 , height = 8)
 }
 
-lumi.exprs.collapse <- readRDS.gz("../dtw/save/lumi.exprs.collapse.rda") %>% t
-lumi.patient <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Pat")]
+lumi.exprs.collapse <- readRDS.gz("../dtw/save/lumi.collapse.rda") #%>% t
 
+#lumi.patient <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Pat")]
+lumi.patient <- readRDS.gz("../ica/save/lumi.collapse.rda")
 patient.reps <- rep(ncol(lumi.patient)/4, nrow(lumi.patient))
 patient.repgrp <- rep(1:(ncol(lumi.patient)/4), each = 4)
 patient.timegrp <- rep(1:4, (ncol(lumi.patient)/4))
 patient.out <- mb.long(lumi.patient, method = "1D", type = "robust", times = 4, reps = patient.reps, rep.grp = patient.repgrp, time.grp = patient.timegrp)
 saveRDS.gz(patient.out, "./save/patient.out.rda")
 
-patient.genes <- data.frame(Symbol = rownames(lumi.exprs.collapse), Hotelling = patient.out$HotellingT2) %>% arrange(desc(Hotelling)) #%>% filter(Hotelling > 10)
+patient.genes <- data.frame(Symbol = rownames(lumi.patient), Hotelling = patient.out$HotellingT2) %>% arrange(desc(Hotelling)) #%>% filter(Hotelling > 10)
 write.xlsx(patient.genes, "./patient.out.xlsx")
 writeLines(as.character(unlist(patient.genes$Symbol)), "./patient.genes.out")
 
@@ -102,6 +103,7 @@ saveRDS.gz(control.out, "./save/control.out.rda")
 control.genes <- data.frame(Symbol = rownames(lumi.exprs.collapse), Hotelling = control.out$HotellingT2) %>% arrange(desc(Hotelling)) %>% filter(Hotelling > 15)
 write.xlsx(control.genes, "./control.out.xlsx")
 
+lumi.exprs.collapse <- readRDS.gz('../dtw/save/lumi.collapse.rda')
 lumi.pca <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Pat|Car")]
 pca.repgrp <- rep(1:(ncol(lumi.pca)/4), each = 4)
 pca.timegrp <- rep(1:4, (ncol(lumi.pca)/4))
@@ -110,7 +112,7 @@ pca.reps <- cbind(rep(length(which(pca.condgrp == 0))/4, nrow(lumi.pca)), rep(le
 pca.out <- mb.long(lumi.pca, method = "2D", type = "robust", times = 4, reps = pca.reps, rep.grp = pca.repgrp, time.grp = pca.timegrp, condition.grp = pca.condgrp)
 saveRDS.gz(pca.out, "./save/pca.out.rda")
 
-pca.genes <- data.frame(Symbol = rownames(lumi.exprs.collapse), Hotelling = pca.out$HotellingT2) %>% arrange(desc(Hotelling)) %>% filter(Hotelling > 10)
+pca.genes <- data.frame(Symbol = rownames(lumi.exprs.collapse), Hotelling = pca.out$HotellingT2) %>% arrange(desc(Hotelling)) #%>% filter(Hotelling > 10)
 write.xlsx(pca.genes, "./pca.out.xlsx")
 
 lumi.pco <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Pat|Con")]
@@ -121,7 +123,7 @@ pco.reps <- cbind(rep(length(which(pco.condgrp == 0))/4, nrow(lumi.pco)), rep(le
 pco.out <- mb.long(lumi.pco, method = "2D", type = "robust", times = 4, reps = pco.reps, rep.grp = pco.repgrp, time.grp = pco.timegrp, condition.grp = pco.condgrp)
 saveRDS.gz(pco.out, "./save/pco.out.rda")
 
-pco.genes <- data.frame(Symbol = rownames(lumi.exprs.collapse), Hotelling = pco.out$HotellingT2) %>% arrange(desc(Hotelling)) %>% filter(Hotelling > 10)
+pco.genes <- data.frame(Symbol = rownames(lumi.exprs.collapse), Hotelling = pco.out$HotellingT2) %>% arrange(desc(Hotelling)) #%>% filter(Hotelling > 10)
 write.xlsx(pco.genes, "./pco.out.xlsx")
 
 lumi.cc <- lumi.exprs.collapse[,str_detect(colnames(lumi.exprs.collapse), "Car|Con")]
