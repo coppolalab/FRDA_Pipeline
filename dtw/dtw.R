@@ -51,13 +51,6 @@ gen.median <- function(dataset)
     return(intensities.median)
 }
 
-#gen.mean <- function(dataset)
-#{
-    #intensities.mean <- by(dataset, factor(dataset$variable), select, -PIDN, -variable, -Status) %>% lapply(Compose(as.matrix, colMeans)) %>% reduce(rbind) %>% data.frame
-    #intensities.mean$Symbol <- unique(dataset$variable)
-    #return(intensities.mean)
-#}
-
 gen.mean <- function(expr.orig, pdata)
 {
     id.filter <- rownames(expr.orig) %>% match.exact
@@ -175,14 +168,9 @@ lumi.long <- lumi.vst[,long.key]
 saveRDS.gz(lumi.long, file = "./save/lumi.long.rda")
 
 PIDN.long <- filter(pData(lumi.long), Sample.Num == "4")$PIDN 
-#lumi.long$Sample.Num[lumi.long$Sample.Num == "1r"] <- 1
-#lumi.long$Sample.Num %<>% as.character %>% as.numeric
 
 targets.long <- filter(pData(lumi.long), PIDN %in% PIDN.long) 
 targets.nums <- by(targets.long, targets.long$PIDN, nrow) %>% as.list %>% melt %>% data.frame 
-#missing.PIDNs <- filter(targets.nums, value < 4)$L1 
-#targets.final <- filter(targets.long, !grepl(match.exact(missing.PIDNs), PIDN))
-#long.index <- sampleNames(lumi.long) %in% targets.final$Sample.Name 
 
 lumi.four <- lumi.long[,lumi.long$PIDN %in% PIDN.long]
 
@@ -282,38 +270,6 @@ saveRDS.gz(lumi.combat, "./save/lumi.combat")
 
 source("../common_functions.R")
 
-#gen.peer(8, exprs(lumi.combat), TRUE, model.combat)
-#model.PEER_covariate <- read_csv("./factor_8.csv") %>% select(-(X1:X6))
-#rownames(model.PEER_covariate) <- colnames(lumi.combat)
-#colnames(model.PEER_covariate) <- paste("X", 1:ncol(model.PEER_covariate), sep = "")
-
-#targets1.gaa <- select(pData(lumi.combat), Sample.Name, GAA1) %>% filter(!is.na(GAA1))
-#cor.gaa <- gen.cor(model.PEER_covariate, targets1.gaa)
-
-#targets1.onset <- select(pData(lumi.combat), Sample.Name, Onset) %>% filter(!is.na(Onset)) 
-#cor.onset <- gen.cor(model.PEER_covariate, targets1.onset)
-
-#PEER.traits.all <- cbind(cor.gaa, cor.onset) %>% data.frame
-#PEER.traits.pval <- select(PEER.traits.all, contains("p.value")) %>% as.matrix
-#PEER.traits.cor <- select(PEER.traits.all, -contains("p.value")) %>% as.matrix
-
-#text.matrix.PEER <- paste(signif(PEER.traits.cor, 2), '\n(', signif(PEER.traits.pval, 1), ')', sep = '')
-#dim(text.matrix.PEER) <- dim(PEER.traits.cor)
-#gen.text.heatmap(PEER.traits.cor, text.matrix.PEER, colnames(PEER.traits.cor), rownames(PEER.traits.cor), "", "PEER factor-trait relationships")
-
-#PEER.trait.out <- data.frame(Factor = rownames(PEER.traits.cor), PEER.traits.cor, PEER.traits.pval)
-#write_csv(PEER.trait.out, "PEER_trait_cor.csv")
-
-#PEER.weights <- read_csv("./weight_8.csv") %>% select(-(X1:X4))
-#PEER.weights.sums <- colSums(abs(PEER.weights)) %>% data.frame
-#PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums)
-#colnames(PEER.weights.sums)[1] <- "Weight"
-
-#p <- ggplot(PEER.weights.sums, aes(x = factor(Factor), y = as.numeric(Weight), group = 1)) + geom_line(color = "blue") 
-#p <- p + theme_bw() + xlab("Factor") + ylab("Weight")
-#CairoPDF("./PEER_weights", height = 4, width = 6)
-#print(p)
-#dev.off()
 
 #Removing effects of covariates + PEER factors  !!DO NOT USE FOR LINEAR MODELING WITH CONTRASTS!!
 model.cov <- cbind(Male = model.sex.reduce, Age = as.numeric(lumi.combat$Draw.Age), RIN = lumi.combat$RIN)
@@ -354,9 +310,9 @@ gen.small.workbook(dtw.cc, "carrier.control.median.xlsx")
 gen.small.workbook(dtw.pca, "patient.carrier.median.xlsx")
 gen.small.workbook(dtw.pco, "patient.control.median.xlsx")
 
-dtw.cc.submit <- dtw.cc[1:500,]
-dtw.pca.submit <- dtw.pca[1:500,]
-dtw.pco.submit <- dtw.pco[1:500,]
+dtw.cc.submit <- dtw.cc[1:300,]
+dtw.pca.submit <- dtw.pca[1:300,]
+dtw.pco.submit <- dtw.pco[1:300,]
 
 get.stringdb(dtw.cc.submit, "cc.median", "cc")
 get.stringdb(dtw.pca.submit, "pca.median", "pca")
@@ -395,9 +351,9 @@ gen.small.workbook(dtw.cc.m, "carrier.control.mean.xlsx")
 gen.small.workbook(dtw.pca.m, "patient.carrier.mean.xlsx")
 gen.small.workbook(dtw.pco.m, "patient.control.mean.xlsx")
 
-dtw.cc.m.submit <- dtw.cc.m[1:500,]
-dtw.pca.m.submit <- dtw.pca.m[1:500,]
-dtw.pco.m.submit <- dtw.pco.m[1:500,]
+dtw.cc.m.submit <- dtw.cc.m[1:300,]
+dtw.pca.m.submit <- dtw.pca.m[1:300,]
+dtw.pco.m.submit <- dtw.pco.m[1:300,]
 saveRDS.gz(dtw.cc.m.submit, "./save/dtw.cc.submit.rda")
 saveRDS.gz(dtw.pca.m.submit, "./save/dtw.pca.submit.rda")
 saveRDS.gz(dtw.pco.m.submit, "./save/dtw.pco.submit.rda")
@@ -486,47 +442,102 @@ dtw.pco.m.enrichr <- map(enrichr.terms, get.enrichrdata, dtw.pco.m.submit, FALSE
 names(dtw.pco.m.enrichr) <- enrichr.terms
 map(names(dtw.pco.m.enrichr), enrichr.wkbk, dtw.pco.m.enrichr, "./enrichr/pco.mean")
 
-pca.biol <- read.xlsx("./enrichr/pca.mean/GO_Biological_Process.xlsx") %>% slice(c(7,17))
+gen.enrichrplot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8)
+{
+    enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+    enrichr.df$Log.pvalue <- -(log10(enrichr.df$P.value))
+    enrichr.df$Term %<>% str_replace_all("\\ \\(.*\\)", "") %>% str_replace_all("\\_.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
+    enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
+    enrichr.df %<>% arrange(Log.pvalue)
+    enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
+    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+    p <- ggplot(enrichr.df.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = enrichr.df$Format.Name, hjust = "left", aes(y = 0.1)) + coord_flip() + theme_bw() + theme(legend.position = "none")
+    p <- p + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+    CairoPDF(filename, height = plot.height, width = plot.width)
+    print(p)
+    dev.off()
+}
+
+get.kappa <- function(term.current, all.terms)
+{
+    map(all.terms, cbind, term.current) %>% map(kappa2) %>% map_dbl(getElement, "value")
+}
+
+get.kappa.cluster <- function(enrichr.output, gene.names, filename)
+{
+    num.genes <- length(gene.names)
+    enrichr.list <- map(enrichr.output$Genes, str_split, ",") %>% map(getElement, 1) 
+    enrichr.match <- map(enrichr.list, is.element, el = toupper(gene.names)) %>% reduce(rbind) %>% t
+    rownames(enrichr.match) <- toupper(gene.names)
+    colnames(enrichr.match) <- enrichr.output$Term
+    enrichr.match.df <- data.frame(enrichr.match)
+
+    enrichr.kappa <- map(enrichr.match.df, get.kappa, enrichr.match.df) %>% reduce(rbind)
+    enrichr.kappa[enrichr.kappa < 0] <- 0
+
+    rownames(enrichr.kappa) <- colnames(enrichr.kappa) <- enrichr.output$Term
+
+    CairoPDF(str_c(filename, "heatmap", sep = "."), width = 30, height = 30)
+    heatmap.plus(enrichr.kappa, col = heat.colors(40), symm = TRUE, margins = c(20,20))
+    dev.off()
+
+    kappa.dist <- dist(enrichr.kappa, method = "manhattan")
+    kappa.clust <- hclust(kappa.dist, method = "average")
+
+    CairoPDF(str_c(filename, "clust", sep = "."), height = 30, width = 30)
+    plot(kappa.clust)
+    dev.off()
+
+    kappa.modules <- cutreeDynamic(kappa.clust, minClusterSize = 2, method = "tree")
+    kappa.modules.TOM <- cutreeDynamic(kappa.clust, distM = TOMdist(enrichr.kappa), minClusterSize = 2, method = "hybrid")
+    kappa.modules.df <- data.frame(Term = rownames(enrichr.kappa), Module = kappa.modules, Module.TOM = kappa.modules.TOM)
+
+    enrichr.output$Module <- kappa.modules
+    enrichr.output$Module.TOM <- kappa.modules.TOM
+    enrichr.output %<>% select(Index:Combined.Score, Module:Module.TOM, Genes)
+    
+    wb <- createWorkbook()
+    addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
+    writeDataTable(wb = wb, sheet = 1, x = enrichr.output, withFilter = TRUE)
+    freezePane(wb, 1, firstRow = TRUE)
+    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
+    setColWidths(wb, 1, cols = c(1, 3:ncol(enrichr.output)), widths = "auto")
+    setColWidths(wb, 1, cols = 2, widths = 45)
+    
+    saveWorkbook(wb, str_c(filename, "table.xlsx", sep = "."), overwrite = TRUE) 
+}
+
+yellow.only <- filter(modules.out, module.color == "yellow")
+
+yellow.gobiol.file <- "./enrichr/yellow/yellow_GO_Biological_Process_2015.xlsx"
+yellow.gobiol <- read.xlsx(yellow.gobiol.file) 
+yellow.gobiol$Num.Genes <- map(yellow.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+yellow.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
+yellow.gobiol$Database <- "GO Biological Process"
+get.kappa.cluster(yellow.gobiol, yellow.only$Symbol, file_path_sans_ext(yellow.gobiol.file))
+
+pca.biol <- read.xlsx("./enrichr/pca.mean/GO_Biological_Process_2015.xlsx") %>% slice(c(30,35,166))
 pca.biol$Database <- "GO Biological Process"
-pca.reactome <- read.xlsx("./enrichr/pca.mean/Reactome_2015.xlsx") %>% slice(c(1,40,51))
+pca.molec <- read.xlsx("./enrichr/pca.mean/GO_Molecular_Function_2015.xlsx") %>% slice(1)
+pca.molec$Database <- "GO Molecular Function"
+pca.reactome <- read.xlsx("./enrichr/pca.mean/Reactome_2016.xlsx") %>% slice(c(28, 51))
 pca.reactome$Database <- "Reactome"
-pca.kegg <- read.xlsx("./enrichr/pca.mean/KEGG_2015.xlsx") %>% slice(1)
-pca.kegg$Database <- "KEGG"
-pca.enrichr <- rbind(pca.biol, pca.reactome, pca.kegg)
-pca.enrichr$Gene.Count <- map(pca.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-pca.enrichr$Log.pvalue <- -(log10(pca.enrichr$P.value))
+pca.enrichr <- rbind(pca.biol, pca.molec, pca.reactome)
 
-pca.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
-pca.enrichr$Format.Name <- paste(pca.enrichr$Database, ": ", pca.enrichr$GO.Term, " (", pca.enrichr$Gene.Count, ")", sep = "")
-pca.enrichr.plot <- select(pca.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+gen.enrichrplot(pca.enrichr, "pca.enrichr")
 
-p <- ggplot(pca.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = pca.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
-p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-CairoPDF("pca.enrichr", height = 5, width = 8)
-print(p)
-dev.off()
-
-pco.biol <- read.xlsx("./enrichr/pco.mean/GO_Biological_Process.xlsx") %>% slice(c(7,12,15))
+pco.biol <- read.xlsx("./enrichr/pco.mean/GO_Biological_Process_2015.xlsx") %>% slice(c(27,31))
 pco.biol$Database <- "GO Biological Process"
-pco.molec <- read.xlsx("./enrichr/pco.mean/GO_Molecular_Function.xlsx") %>% slice(8)
+pco.molec <- read.xlsx("./enrichr/pco.mean/GO_Molecular_Function_2015.xlsx") %>% slice(c(1,8))
 pco.molec$Database <- "GO Molecular Function"
-pco.reactome <- read.xlsx("./enrichr/pco.mean/Reactome_2015.xlsx") %>% slice(c(1,45))
+pco.reactome <- read.xlsx("./enrichr/pco.mean/Reactome_2016.xlsx") %>% slice(24)
 pco.reactome$Database <- "Reactome"
-pco.kegg <- read.xlsx("./enrichr/pco.mean/KEGG_2015.xlsx") %>% slice(c(1,6))
+pco.kegg <- read.xlsx("./enrichr/pco.mean/KEGG_2016.xlsx") %>% slice(c(9,15))
 pco.kegg$Database <- "KEGG"
 pco.enrichr <- rbind(pco.biol, pco.molec, pco.reactome, pco.kegg)
-pco.enrichr$Gene.Count <- map(pco.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-pco.enrichr$Log.pvalue <- -(log10(pco.enrichr$P.value))
 
-pco.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
-pco.enrichr$Format.Name <- paste(pco.enrichr$Database, ": ", pco.enrichr$GO.Term, " (", pco.enrichr$Gene.Count, ")", sep = "")
-pco.enrichr.plot <- select(pco.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
-
-p <- ggplot(pco.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = pco.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
-p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-CairoPDF("pco.enrichr", height = 5, width = 8)
-print(p)
-dev.off()
+gen.enrichrplot(pco.enrichr, "pco.enrichr")
 
 cc.biol <- read.xlsx("./enrichr/cc.mean/GO_Biological_Process.xlsx") %>% slice(c(12,15))
 cc.biol$Database <- "GO Biological Process"
@@ -535,15 +546,3 @@ cc.reactome$Database <- "Reactome"
 cc.kegg <- read.xlsx("./enrichr/cc.mean/KEGG_2015.xlsx") %>% slice(2)
 cc.kegg$Database <- "KEGG"
 cc.enrichr <- rbind(cc.biol, cc.reactome, cc.kegg)
-cc.enrichr$Gene.Count <- map(cc.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-cc.enrichr$Log.pvalue <- -(log10(cc.enrichr$P.value))
-
-cc.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
-cc.enrichr$Format.Name <- paste(cc.enrichr$Database, ": ", cc.enrichr$GO.Term, " (", cc.enrichr$Gene.Count, ")", sep = "")
-cc.enrichr.plot <- select(cc.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
-
-p <- ggplot(cc.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = cc.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
-p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-CairoPDF("cc.enrichr", height = 5, width = 8)
-print(p)
-dev.off()

@@ -30,6 +30,7 @@ enableWGCNAThreads()
 library(magrittr)
 library(purrr)
 library(functional)
+library(Cairo)
 
 #Data arrangement
 library(reshape2)
@@ -38,7 +39,6 @@ library(dplyr)
 library(tidyr)
 library(doBy)
 
-library(Cairo)
 
 saveRDS.gz <- function(object,file,threads=parallel::detectCores()) {
   con <- pipe(paste0("pigz -p",threads," > ",file),"wb")
@@ -51,6 +51,23 @@ readRDS.gz <- function(file,threads=parallel::detectCores()) {
   object <- readRDS(file = con)
   close(con)
   return(object)
+}
+
+gen.enrichrplot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8)
+{
+    enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+    enrichr.df$Log.pvalue <- -(log10(enrichr.df$P.value))
+    enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% str_replace_all("\\_.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
+    enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
+    enrichr.df %<>% arrange(Log.pvalue)
+    enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
+    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+    p <- ggplot(enrichr.df.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = enrichr.df$Format.Name, hjust = "left", aes(y = 0.1)) + coord_flip() + theme_bw() + theme(legend.position = "none")
+    p <- p + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+    CairoPDF(filename, height = plot.height, width = plot.width)
+    print(p)
+    dev.off()
 }
 
 intensities.means <- readRDS.gz("../dtw/save/intensities.means.rda")
@@ -173,9 +190,10 @@ source("../../code/GO/enrichr.R")
 stringdb.submit <- function(module.color, module.df)
 {
     module.genes <- module.df[[module.color]]
-    get.stringdb(module.genes, module.color)
+    get.stringdb(module.genes, module.color, "./stringdb")
 }
 map(names(module.symbols), stringdb.submit, module.symbols)
+brown.stringdb <- get.stringdb(module.symbols$brown, "brown")
 blue.stringdb <- get.stringdb(module.symbols$blue, "blue", edge.threshold = 700)
 red.stringdb <- get.stringdb(module.symbols$red, "red", edge.threshold = 700)
 
@@ -274,27 +292,13 @@ print(p)
 dev.off()
 
 #brown GO
-brown.biol <- read.xlsx("./enrichr/brown/brown_GO_Biological_Process.xlsx") %>% slice(c(11,16))
+brown.biol <- read.xlsx("./enrichr/brown/brown_GO_Biological_Process_2015.xlsx") %>% slice(c(1,55))
 brown.biol$Database <- "GO Biological Process"
-brown.molec <- read.xlsx("./enrichr/brown/brown_GO_Molecular_Function.xlsx") %>% slice(6)
-brown.molec$Database <- "GO Molecular Function"
-brown.kegg <- read.xlsx("./enrichr/brown/brown_KEGG_2015.xlsx") %>% slice(2)
-brown.kegg$Database <- "KEGG"
-brown.reactome <- read.xlsx("./enrichr/brown/brown_Reactome_2015.xlsx") %>% slice(c(23,25))
+brown.reactome <- read.xlsx("./enrichr/brown/brown_Reactome_2016.xlsx") %>% slice(1)
 brown.reactome$Database <- "Reactome"
-brown.enrichr <- rbind(brown.biol, brown.molec, brown.kegg, brown.reactome)
-brown.enrichr$Gene.Count <- map(brown.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-brown.enrichr$Log.pvalue <- -(log10(brown.enrichr$P.value))
+brown.enrichr <- rbind(brown.biol, brown.reactome)
 
-brown.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
-brown.enrichr$Format.Name <- paste(brown.enrichr$Database, ": ", brown.enrichr$GO.Term, " (", brown.enrichr$Gene.Count, ")", sep = "")
-brown.enrichr.plot <- select(brown.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
-
-p <- ggplot(brown.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = brown.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
-p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-CairoPDF("brown.enrichr", height = 5, width = 8)
-print(p)
-dev.off()
+gen.enrichrplot(brown.enrichr, "brown.enrichr")
 
 #red GO
 red.biol <- read.xlsx("./enrichr/red/red_GO_Biological_Process.xlsx") %>% slice(c(1,2,6))

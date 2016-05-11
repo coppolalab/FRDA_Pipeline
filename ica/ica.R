@@ -372,7 +372,29 @@ l_ply(names(intensities.ica.genes), gen.icatables, intensities.ica.genes, "ica.m
 source("../../code/GO/enrichr.R")
 enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "WikiPathways_2016", "Reactome_2016", "BioCarta_2016", "PPI_Hub_Proteins", "Humancyc_2016", "NCI-Nature_2016", "Panther_2016") 
 map(names(intensities.ica.genes), enrichr.ica, intensities.ica.genes, enrichr.terms, "intensities.mean")
-map(names(intensities.ica.genes), stringdb.ica, intensities.ica.genes, "means")
+ica.ppinets <- map(names(intensities.ica.genes), stringdb.ica, intensities.ica.genes, "means")
+ica.ppinets <- ica.ppinets[[1]]
+names(ica.ppinets) <- names(intensities.ica.genes[[1]])
+
+symbols.subnet <- ica.ppinets$X3
+edge.threshold <- 400
+edge.weights <- edge_attr(symbols.subnet, "combined_score")
+pruned.subnet <- delete.edges(symbols.subnet, which(edge.weights < edge.threshold))
+num.edges <- map(1:vcount(pruned.subnet), incident, graph = pruned.subnet) %>% map_dbl(length) 
+pruned.subnet2 <- delete.vertices(pruned.subnet, which(num.edges == 0))
+communities.optimal <- cluster_optimal(pruned.subnet2, weights = edge_attr(pruned.subnet2, "combined_score")/1000)
+vertex.colors <- rainbow(vcount(pruned.subnet2))
+V(pruned.subnet2)$color <- vertex.colors
+edge.df <- data.frame(edge_attr(symbols.subnet))
+edge.thickness <- edge.df$combined_score / 200
+
+filepath <- file.path(prefix, plot.name)
+
+CairoPDF(filepath, width = 30, height = 30)
+plot.igraph(pruned.subnet2, vertex.size = 2, vertex.label.dist = 0.12, vertex.label.degree = -pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.width = edge.thickness, edge.color = "#0000FF99")
+dev.off()
+return(symbols.subnet)
+
 saveRDS.gz(intensities.ica.genes, "./save/intensities.ica.genes.rda")
 
 #X1 GO

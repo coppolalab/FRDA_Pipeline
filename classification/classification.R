@@ -103,15 +103,15 @@ saveRDS.gz(rf.cc, "./save/rf.cc.rda")
 rf.cc.genes <- data.frame("nuID" = rownames(rf.cc$importance), "Importance" = as.vector(rf.cc$importance)) %>% join(fdata) %>% arrange(desc(Importance))
 write.xlsx(rf.cc.genes, "rf.cc.genes.xlsx")
 
-rfcv.pca <- readRDS.gz("./save/rfcv.pca.rda")
+rfcv.pca <- readRDS.gz("./save/rfcv.Patient.Carrier_smallmtry.rda")
 
-rfcv.pco <- rfcv(t(exprs(lumi.pco)), droplevels(lumi.pco$Status), ntree = 1000)
-saveRDS.gz(rfcv.pco, "./save/rfcv.pco.rda")
-rfcv.pco <- readRDS.gz("./save/rfcv.pco.rda")
+rfcv.pco <- rfcv(t(exprs(lumi.pco)), droplevels(lumi.pco$Status), step = 0.8, cv.fold = 3, ntree = 1000, mtry = function(p) nrow(lumi.pco))
+#saveRDS.gz(rfcv.pco, "./save/rfcv.pco.rda")
+rfcv.pco <- readRDS.gz("./save/rfcv.Patient.Control_smallmtry.rda")
 
-rfcv.cc <- rfcv(t(exprs(lumi.cc)), droplevels(lumi.cc$Status), ntree = 1000)
-saveRDS.gz(rfcv.cc, "./save/rfcv.cc.rda")
-rfcv.cc <- readRDS.gz("./save/rfcv.cc.rda")
+#rfcv.cc <- rfcv(t(exprs(lumi.cc)), droplevels(lumi.cc$Status), ntree = 1000)
+#saveRDS.gz(rfcv.cc, "./save/rfcv.cc.rda")
+rfcv.cc <- readRDS.gz("./save/rfcv.Carrier.Control_smallmtry.rda")
 
 rf.bigmtry.pca <- randomForest(t(exprs(lumi.pca)), droplevels(lumi.pca$Status), ntree = 1000, mtry = ncol(t(exprs(lumi.pca))))
 saveRDS.gz(rf.bigmtry.pca, "./save/rf.bigmtry.pca.rda")
@@ -127,6 +127,10 @@ rf.bigmtry.cc <- randomForest(t(exprs(lumi.cc)), droplevels(lumi.cc$Status), ntr
 saveRDS.gz(rf.bigmtry.cc, "./save/rf.bigmtry.cc.rda")
 rf.bigmtry.cc.genes <- data.frame("nuID" = rownames(rf.bigmtry.cc$importance), "Importance" = as.vector(rf.bigmtry.cc$importance)) %>% join(fdata) %>% arrange(desc(Importance))
 write.xlsx(rf.bigmtry.cc.genes, "rf.bigmtry.cc.genes.xlsx")
+
+rfcv.bigmtry.pca <- readRDS.gz("./save/rfcv.Patient.Carrier.rda")
+rfcv.bigmtry.pco <- readRDS.gz("./save/rfcv.Patient.Control.rda")
+rfcv.bigmtry.cc <- readRDS.gz("./save/rfcv.Carrier.Control.rda")
 
 #Linear Discriminant Analysis
 lda.predfunction <- function(train.x, train.y, test.x, test.y, negative)
@@ -281,8 +285,8 @@ extract.svmlist <- function(featsweep.object)
 }
 source("../../code/msvmRFE.R")
 
-#svm.pca <- svm(x = t(expr.pca), y = droplevels(lumi.pca$Status), type = "C-classification", kernel = "linear", cross = 5, cost = 1, cachesize = 16000)
-#saveRDS.gz(svm.pca, "./save/svm.pca.rda")
+svm.pca <- svm(x = t(exprs(lumi.pca)), y = droplevels(lumi.pca$Status), type = "C-classification", kernel = "linear", cross = 3, cost = 1, cachesize = 16000)
+saveRDS.gz(svm.pca, "./save/svm.pca.rda")
 #svm.pca <- svmRFE(svm.pca.input, k = 10, halve.above = 100)
 
 nfold <- 3
@@ -297,7 +301,7 @@ colnames(svm.pca.features) <- "Symbol"
 #svm.pca.genes <- join(svm.pca.features, fdata)
 write.xlsx(svm.pca.features, "svm.pca.features.xlsx")
 
-#svm.pco <- svm(x = t(expr.pco), y = droplevels(lumi.pco$Status), type = "C-classification", kernel = "linear", cross = 5, cost = 1, cachesize = 16000)
+svm.pco <- svm(x = t(exprs(lumi.pco)), y = droplevels(lumi.pco$Status), type = "C-classification", kernel = "linear", cross = 3, cost = 1, cachesize = 16000)
 #saveRDS.gz(svm.pco, "./save/svm.pco.rda")
 
 svm.pco.input <- cbind(as.integer(droplevels(lumi.pco$Status)), t(exprs(lumi.pco)))
@@ -363,7 +367,7 @@ get.stringdb(svm.cc.submit, "svm.cc", "./cc")
 get.stringdb(svm.pca.submit, "svm.pca", "./pca")
 get.stringdb(svm.pco.submit, "svm.pco", "./pco")
 
-enrichr.terms <- list("GO_Biological_Process", "GO_Molecular_Function", "KEGG_2015", "WikiPathways_2015", "Reactome_2015", "BioCarta_2015", "PPI_Hub_Proteins", "HumanCyc", "NCI-Nature", "Panther") 
+enrichr.terms <- list("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "WikiPathways_2016", "Reactome_2016", "Panther_2016") 
 svm.cc.enrichr <- map(enrichr.terms, get.enrichrdata, svm.cc.submit, FALSE)
 names(svm.cc.enrichr) <- enrichr.terms
 map(names(svm.cc.enrichr), enrichr.wkbk, svm.cc.enrichr, "./enrichr/cc")
@@ -501,8 +505,8 @@ saveRDS.gz(rknn.cc, "./save/rknn.cc.rda")
 
 #Pooled accuracy table
 rf.accuracy <- list((1 - rfcv.pca$error.cv), (1 - rfcv.pco$error.cv), (1 - rfcv.cc$error.cv)) %>% map(max) %>% unlist #needs SE
-rglm.accuracies <- list(rglm.pca.table$Accuracy, rglm.pco.table$Accuracy, rglm.cc.table$Accuracy) %>% map(max) %>% unlist #needs SE
-svm.accuracies <- list(svm.pca$tot.accuracy, svm.pco$tot.accuracy, svm.cc$tot.accuracy) %>% map(max) %>% unlist #Calculate SE!
+rglm.accuracies <- list(rglm.fold.pca$stat["acc"], rglm.fold.pco$stat["acc"], rglm.fold.cc$stat["acc"]) %>% map(max) %>% unlist #needs SE
+svm.accuracies <- list(svm.pca.accuracies.df$Accuracy, svm.pco.accuracies.df$Accuracy, svm.cc.accuracies.df$Accuracy) %>% map(max) %>% unlist #Calculate SE!
 sc.accuracies <- list(num.genes.pca$Accuracy, num.genes.pco$Accuracy, num.genes.cc$Accuracy) %>% map(max) %>% unlist #needs SE
 ridge.accuracies <- list(ridge.pca$cvm, ridge.pco$cvm, ridge.cc$cvm) %>% map(max) %>% unlist
 lasso.accuracies <- list(lasso.pca$cvm, lasso.pco$cvm, lasso.cc$cvm) %>% map(max) %>% unlist
@@ -511,10 +515,10 @@ rknn.accuracies <- list(rknn.pca$mean_accuracy, rknn.pco$mean_accuracy, rknn.cc$
 lda.accuracies <- c(lda.pca.cv$stat["acc"], lda.pco.cv$stat["acc"], lda.cc.cv$stat["acc"])
 dlda.accuracies <- c(dlda.pca.cv$stat["acc"], dlda.pco.cv$stat["acc"], dlda.cc.cv$stat["acc"])
 
-accuracies.table <- rbind(svm.accuracies / 100, sc.accuracies, ridge.accuracies, lasso.accuracies, elasticnet.accuracies, rknn.accuracies, lda.accuracies, dlda.accuracies) %>% data.frame 
+accuracies.table <- rbind(rf.accuracy, rglm.accuracies, svm.accuracies, sc.accuracies, ridge.accuracies, lasso.accuracies, elasticnet.accuracies, rknn.accuracies, lda.accuracies, dlda.accuracies) %>% data.frame 
 colnames(accuracies.table) <- c("PCA", "PCO", "CC")
 accuracies.table$mean <- rowMeans(accuracies.table)
-accuracies.table$method <- c("SVM", "SC", "Ridge", "Lasso", "Elastic.Net", "RKNN", "LDA", "DLDA") %>% factor
+accuracies.table$method <- c("RF", "RGLM", "SVM", "SC", "Ridge", "Lasso", "Elastic.Net", "RKNN", "LDA", "DLDA") %>% factor
 accuracies.table %<>% arrange(desc(mean))
 
 #Accuracy plots

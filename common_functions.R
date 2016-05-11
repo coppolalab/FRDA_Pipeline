@@ -68,6 +68,7 @@ gen.peer <- function(num.factors, intensities, use.covariates, covariates)
     write.csv(data.frame(PEER_getX(model)), file = paste("factor_", num.factors, sep = "", ".csv"), row.names = FALSE)
     write.csv(data.frame(PEER_getW(model)), file = paste("weight_", num.factors, sep = "", ".csv"), row.names = FALSE)
     write.csv(data.frame(PEER_getAlpha(model)), file = paste("precision_", num.factors, sep = "", ".csv"), row.names = FALSE)
+    write.csv(residuals.PEER, file = paste("residuals_", num.factors, sep = "", ".csv"), row.names = FALSE)
 
     CairoPDF(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
     PEER_plotModel(model)

@@ -165,6 +165,7 @@ gen.enrichrplot <- function(enrichr.df, filename, plot.height = 5, plot.width = 
 }
 
 lumi.import <- readRDS.gz(file = "../baseline_lumi/save/rmcov.collapse.rda")
+rmsv.import <- readRDS.gz("../baseline_lumi/save/rmsv.export.rda")
 
 #Calculate scale free topology measures for different values of power adjacency function
 powers <- c(c(1:10), seq(from = 12, to = 39, by = 2))
@@ -282,11 +283,11 @@ rownames(status.pval) <- names(cor.status)
 pval.adjust <- map(status.pval, p.adjust, method = "fdr") %>% reduce(cbind) %>% data.frame
 rownames(pval.adjust) <- rownames(status.pval)
 colnames(pval.adjust) <- paste(colnames(status.pval), ".pval")
-status.pval$Module <- rownames(status.pval)
 
 text.matrix.traits <- paste(signif(as.matrix(status.diff), 2), '\n(', signif(as.matrix(status.pval), 1), ')', sep = '')
 dim(text.matrix.traits) = dim(status.diff)
 
+status.pval$Module <- rownames(status.pval)
 heatmap.range <- c(min(as.matrix(status.diff)) * 1.1, max(as.matrix(status.diff)) * 1.1)
 gen.text.heatmap(as.matrix(status.diff), text.matrix.traits, colnames(status.diff), colnames(ME.genes), "", "module-trait relationships", heatmap.range)
 
@@ -334,7 +335,7 @@ ME.genes.plot <- mutate(data.frame(ME.genes), Sample.ID = sample.ids)
 expr.data.plot <- data.frame(t(expr.collapse), module.colors)
 cluster <- makeForkCluster(8)
 split(expr.data.plot, expr.data.plot$module.colors) %>% map(gen.heatmap, ME.genes.plot)
-by(expr.data.plot, expr.data.plot$module.colors, gen.heatmap, ME.genes.plot)
+#by(expr.data.plot, expr.data.plot$module.colors, gen.heatmap, ME.genes.plot)
 
 #modules.out <- select(gene.info, Symbol, module.color)
 #targets.final.known$Sample.Name %<>% str_replace(" ", "")
@@ -347,10 +348,22 @@ trap1 <- map(color.names[-6], enrichr.submit, modules.out, enrichr.terms, FALSE)
 
 #skipped
 split(modules.out, modules.out$module.color) %>% map(submit.stringdb)
+black.genes <- filter(modules.out, Module == "black")
+black.ppi <- submit.stringdb(black.genes, 400)
 
-submit.stringdb <- function(module.subset)
+edge.weights <- edge_attr(black.ppi, "combined_score")
+pruned.subnet <- delete.edges(black.ppi, which(edge.weights < 400))
+num.edges <- map(1:vcount(pruned.subnet), incident, graph = pruned.subnet) %>% map_dbl(length) 
+names(num.edges) <- V(pruned.subnet)$name
+pruned.subnet2 <- delete.vertices(pruned.subnet, which(num.edges == 0))
+vertex.colors <- rainbow(vcount(pruned.subnet2))
+V(pruned.subnet2)$color <- vertex.colors
+edge.df <- data.frame(edge_attr(symbols.subnet))
+edge.thickness <- edge.df$combined_score / 200
+
+submit.stringdb <- function(module.subset, threshold = 400)
 {
-    catch <- get.stringdb(module.subset, unique(module.subset$module.color), "./stringdb")
+    get.stringdb(module.subset, unique(module.subset$Module), "./stringdb", edge.threshold = threshold)
 }
 
 rownames(ME.genes) <- rownames(expr.collapse)
@@ -358,47 +371,112 @@ rownames(ME.genes) <- rownames(expr.collapse)
 source("../common_functions.R")
 
 ME.df <- data.frame(Status = targets.final.known$Status, ME.genes)
-p <- ggplot(ME.df, aes(factor(Status), magenta, col = "magenta") ) + geom_boxplot()
+p <- ggplot(ME.df, aes(factor(Status), green) ) + geom_boxplot(col = "green")
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.x = element_blank(), legend.position = "none")
-p <- p + ylab("Eigengene") + ggtitle(paste("P < ", anova.status["magenta"]))
-CairoPDF("magenta.eigengene", width = 4, height = 4)
+p <- p + ylab("Eigengene") + ggtitle(paste("P < ", anova.status["MEgreen"]))
+CairoPDF("green.eigengene", width = 4, height = 4)
 print(p)
 dev.off()
 
-p <- ggplot(ME.df, aes(factor(Status), black ) ) + geom_boxplot()
+p <- ggplot(ME.df, aes(factor(Status), pink) ) + geom_boxplot(col = "pink" )
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.x = element_blank(), legend.position = "none")
-p <- p + ylab("Eigengene") + ggtitle(paste("P < ", anova.status["black"]))
-CairoPDF("black.eigengene", width = 4, height = 4)
+p <- p + ylab("Eigengene") + ggtitle(paste("P < ", anova.status["MEpink"]))
+CairoPDF("pink.eigengene", width = 4, height = 4)
 print(p)
 dev.off()
 
-plot.eigencor(module.traits.pval, "Control.Carrier", lumi.import$Status)
-plot.eigencor(module.traits.pval, "Control.Patient", lumi.import$Status)
-plot.eigencor(module.traits.pval, "Carrier.Patient", lumi.import$Status)
+#plot.eigencor(module.traits.pval, "Control.Carrier", lumi.import$Status)
+#plot.eigencor(module.traits.pval, "Control.Patient", lumi.import$Status)
+#plot.eigencor(module.traits.pval, "Carrier.Patient", lumi.import$Status)
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()
 unlist(test) %>% sort
 
+get.kappa <- function(term.current, all.terms)
+{
+    map(all.terms, cbind, term.current) %>% map(kappa2) %>% map_dbl(getElement, "value")
+}
+
+get.kappa.cluster <- function(enrichr.output, gene.names, filename)
+{
+    num.genes <- length(gene.names)
+    enrichr.list <- map(enrichr.output$Genes, str_split, ",") %>% map(getElement, 1) 
+    enrichr.match <- map(enrichr.list, is.element, el = toupper(gene.names)) %>% reduce(rbind) %>% t
+    rownames(enrichr.match) <- toupper(gene.names)
+    colnames(enrichr.match) <- enrichr.output$Term
+    enrichr.match.df <- data.frame(enrichr.match)
+
+    enrichr.kappa <- map(enrichr.match.df, get.kappa, enrichr.match.df) %>% reduce(rbind)
+    enrichr.kappa[enrichr.kappa < 0] <- 0
+
+    rownames(enrichr.kappa) <- colnames(enrichr.kappa) <- enrichr.output$Term
+
+    CairoPDF(str_c(filename, "heatmap", sep = "."), width = 30, height = 30)
+    heatmap.plus(enrichr.kappa, col = heat.colors(40), symm = TRUE, margins = c(20,20))
+    dev.off()
+
+    kappa.dist <- dist(enrichr.kappa, method = "manhattan")
+    kappa.clust <- hclust(kappa.dist, method = "average")
+
+    CairoPDF(str_c(filename, "clust", sep = "."), height = 30, width = 30)
+    plot(kappa.clust)
+    dev.off()
+
+    kappa.modules <- cutreeDynamic(kappa.clust, minClusterSize = 2, method = "tree")
+    kappa.modules.TOM <- cutreeDynamic(kappa.clust, distM = TOMdist(enrichr.kappa), minClusterSize = 2, method = "hybrid")
+    kappa.modules.df <- data.frame(Term = rownames(enrichr.kappa), Module = kappa.modules, Module.TOM = kappa.modules.TOM)
+
+    enrichr.output$Module <- kappa.modules
+    enrichr.output$Module.TOM <- kappa.modules.TOM
+    enrichr.output %<>% select(Index:Combined.Score, Module:Module.TOM, Genes)
+    
+    wb <- createWorkbook()
+    addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
+    writeDataTable(wb = wb, sheet = 1, x = enrichr.output, withFilter = TRUE)
+    freezePane(wb, 1, firstRow = TRUE)
+    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
+    setColWidths(wb, 1, cols = c(1, 3:ncol(enrichr.output)), widths = "auto")
+    setColWidths(wb, 1, cols = 2, widths = 45)
+    
+    saveWorkbook(wb, str_c(filename, "table.xlsx", sep = "."), overwrite = TRUE) 
+}
+
+green.only <- filter(modules.out, Module == "green")
+pink.only <- filter(modules.out, Module == "pink")
+
 #Final plots
-black.biol <- read.xlsx("./enrichr/black/black_GO_Biological_Process_2015.xlsx") %>% slice(c(3,31))
-black.biol$Database <- "GO Biological Process"
-black.molec <- read.xlsx("./enrichr/black/black_GO_Molecular_Function_2015.xlsx") %>% slice(c(1,2))
-black.molec$Database <- "GO Molecular Function"
-black.kegg <- read.xlsx("./enrichr/black/black_KEGG_2016.xlsx") %>% slice(c(5,6,13))
-black.kegg$Database <- "KEGG"
-black.reactome <- read.xlsx("./enrichr/black/black_Reactome_2016.xlsx") %>% slice(13)
-black.reactome$Database <- "Reactome"
-black.enrichr <- rbind(black.biol, black.molec, black.kegg, black.reactome)
+green.gobiol.file <- "./enrichr/green/green_GO_Biological_Process_2015.xlsx"
+green.gobiol <- read.xlsx(green.gobiol.file) 
+green.gobiol$Num.Genes <- map(green.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+green.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(green.gobiol, green.only$Symbol, file_path_sans_ext(green.gobiol.file))
+green.gobiol$Database <- "GO Biological Process"
+green.gobiol.final <- slice(green.gobiol, c(1, 25, 35))
 
-gen.enrichrplot(black.enrichr, "black.enrichr")
+green.molec <- read.xlsx("./enrichr/green/green_GO_Molecular_Function_2015.xlsx") %>% slice(14)
+green.molec$Database <- "GO Molecular Function"
+green.molec$Num.Genes <- map(green.molec$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
 
-magenta.biol <- read.xlsx("./enrichr/magenta/magenta_GO_Biological_Process_2015.xlsx") %>% slice(c(3,6))
-magenta.biol$Database <- "GO Biological Function"
-magenta.molec <- read.xlsx("./enrichr/magenta/magenta_GO_Molecular_Function_2015.xlsx") %>% slice(13)
-magenta.molec$Database <- "GO Molecular Function"
-magenta.reactome <- read.xlsx("./enrichr/magenta/magenta_Reactome_2016.xlsx") %>% slice(c(2,3))
-magenta.reactome$Database <- "Reactome"
-magenta.enrichr <- rbind(magenta.molec, magenta.biol, magenta.reactome)
+green.reactome <- read.xlsx("./enrichr/green/green_Reactome_2016.xlsx") %>% slice(2)
+green.reactome$Database <- "Reactome"
+green.reactome$Num.Genes <- map(green.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
 
-gen.enrichrplot(magenta.enrichr, "magenta.enrichr")
+green.enrichr <- rbind(green.gobiol.final, green.molec, green.reactome)
+gen.enrichrplot(green.enrichr, "green.enrichr")
+
+pink.gobiol.file <- "./enrichr/pink/pink_GO_Biological_Process_2015.xlsx"
+pink.gobiol <- read.xlsx(pink.gobiol.file) 
+pink.gobiol$Num.Genes <- map(pink.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+pink.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
+get.kappa.cluster(pink.gobiol, pink.only$Symbol, file_path_sans_ext(pink.gobiol.file))
+pink.gobiol$Database <- "GO Biological Process"
+pink.gobiol.final <- slice(pink.gobiol, c(4, 53, 41, 6))
+
+pink.reactome <- read.xlsx("./enrichr/pink/pink_Reactome_2016.xlsx") %>% slice(1)
+pink.reactome$Database <- "Reactome"
+pink.reactome$Num.Genes <- map(pink.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+
+pink.enrichr <- rbind(pink.gobiol.final, pink.reactome)
+
+gen.enrichrplot(pink.gobiol.final, "pink.enrichr")

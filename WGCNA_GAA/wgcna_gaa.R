@@ -10,6 +10,8 @@ library(lumi)
 library(lumiHumanAll.db)
 library(annotate)
 library(R.utils)
+library(irr)
+library(tools)
 
 #Functional programming
 library(magrittr)
@@ -32,6 +34,7 @@ library(extrafont)
 library(Cairo)
 library(igraph)
 library(TeachingDemos)
+library(heatmap.plus)
 
 #Reading and writing tables
 library(readr)
@@ -151,11 +154,11 @@ enrichr.submit <- function(index, full.df, enrichr.terms, use.weights)
 {
     dataset <- filter(full.df, module.colors == index)
     dir.create(file.path("./enrichr", index), showWarnings = FALSE)
-    enrichr.data <- parLapply(cluster, enrichr.terms, get.enrichrdata, dataset, FALSE)
+    enrichr.data <- map(enrichr.terms, get.enrichrdata, dataset, FALSE)
     enrichr.names <- enrichr.terms[!is.na(enrichr.data)]
     enrichr.data <- enrichr.data[!is.na(enrichr.data)]
     names(enrichr.data) <- enrichr.names
-    parLapply(cluster, names(enrichr.data), enrichr.wkbk, enrichr.data, index)
+    map(names(enrichr.data), enrichr.wkbk, enrichr.data, index)
 }
 
 enrichr.wkbk <- function(subindex, full.df, index)
@@ -171,6 +174,23 @@ enrichr.wkbk <- function(subindex, full.df, index)
 
     filename = paste("./enrichr/", index, "/", index, "_", subindex, ".xlsx", sep = "")
     saveWorkbook(wb, filename, overwrite = TRUE) 
+}
+
+gen.enrichrplot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8)
+{
+    enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+    enrichr.df$Log.pvalue <- -(log10(enrichr.df$P.value))
+    enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
+    enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
+    enrichr.df %<>% arrange(Log.pvalue)
+    enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
+    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+    p <- ggplot(enrichr.df.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = enrichr.df$Format.Name, hjust = "left", aes(y = 0.1)) + coord_flip() + theme_bw() + theme(legend.position = "none") 
+    p <- p + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+    CairoPDF(filename, height = plot.height, width = plot.width)
+    print(p)
+    dev.off()
 }
 
 lumi.import <- readRDS.gz(file = "../baseline_lumi/save/lumi.baseline.rda")
@@ -209,8 +229,11 @@ age.sex <- lm(model.combat$Age ~ model.combat$Male) %>% anova
 age.gaa <- lm(model.combat$Age ~ model.combat$GAA) %>% anova
 sex.gaa <- lm(model.combat$Male ~ model.combat$GAA) %>% anova
 
-expr.combat <- ComBat(dat = exprs(lumi.patient.annot), batch = factor(lumi.patient.annot$Batch), mod = model.combat)
+expr.combat <- ComBat(dat = exprs(lumi.patient.annot), batch = factor(lumi.patient.annot$Site), mod = model.combat)
 lumi.combat <- lumi.patient.annot
+exprs(lumi.combat) <- expr.combat
+
+expr.combat <- ComBat(dat = exprs(lumi.combat), batch = factor(lumi.combat$Batch), mod = model.combat)
 exprs(lumi.combat) <- expr.combat
 saveRDS.gz(lumi.combat, file = "./save/lumi.combat.rda")
 
@@ -220,8 +243,8 @@ lumi.cleaned <- lumi.combat
 exprs(lumi.cleaned) <- cleaned.expr
 saveRDS.gz(lumi.cleaned, file = "./save/lumi.cleaned.rda")
 
-batch.colors <- c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green")
-gen.boxplot("baseline_intensity_corrected.jpg", lumi.cleaned, batch.colors, "Covariate-corrected intensity", "Intensity")
+#batch.colors <- c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green")
+#gen.boxplot("baseline_intensity_corrected.jpg", lumi.cleaned, batch.colors, "Covariate-corrected intensity", "Intensity")
 
 pdata <- pData(lumi.combat)
 expr.collapse <- collapseRows(exprs(lumi.cleaned), getSYMBOL(featureNames(lumi.cleaned), 'lumiHumanAll.db'), rownames(lumi.cleaned))$datETcollapsed
@@ -247,21 +270,21 @@ CairoPDF("CDC42EP1_gaa", width = 7, height = 5)
 print(p)
 dev.off()
 
-CFH.cor <- filter(cor.df, Symbol == "CFH")
-CFH.df <- data.frame(Expression = expr.collapse["CFH",], GAA = pdata$GAA1)
-p <- ggplot(CFH.df, aes(x = GAA, y = Expression)) + geom_point() + geom_smooth(method = lm) 
+RANBP2.cor <- filter(cor.df, Symbol == "RANBP2")
+RANBP2.df <- data.frame(Expression = expr.collapse["RANBP2",], GAA = pdata$GAA1)
+p <- ggplot(RANBP2.df, aes(x = GAA, y = Expression)) + geom_point() + geom_smooth(method = lm) 
 p <- p + xlab("GAA1 (# of GAA repeats)") + ylab("VST normalized Expression") 
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(colour = "black", size = 2))
-CairoPDF("CFH_gaa", width = 7, height = 5)
+CairoPDF("RANBP2_gaa", width = 7, height = 5)
 print(p)
 dev.off()
 
-CXCR5.cor <- filter(cor.df, Symbol == "CXCR5")
-CXCR5.df <- data.frame(Expression = expr.collapse["CXCR5",], GAA = pdata$GAA1)
-p <- ggplot(CXCR5.df, aes(x = GAA, y = Expression)) + geom_point() + geom_smooth(method = lm) 
+UBE2D3.cor <- filter(cor.df, Symbol == "UBE2D3")
+UBE2D3.df <- data.frame(Expression = expr.collapse["UBE2D3",], GAA = pdata$GAA1)
+p <- ggplot(UBE2D3.df, aes(x = GAA, y = Expression)) + geom_point() + geom_smooth(method = lm) 
 p <- p + xlab("GAA1 (# of GAA repeats)") + ylab("VST normalized Expression") 
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(colour = "black", size = 2)) 
-CairoPDF("CXCR5_gaa", width = 7, height = 5)
+CairoPDF("UBE2D3_gaa", width = 7, height = 5)
 print(p)
 dev.off()
 
@@ -296,6 +319,7 @@ gaa.gomole$Database <- "GO Molecular Process"
 gaa.reactome <- read.xlsx("./enrichr/gaa_cor/gaa_cor_Reactome_2015.xlsx") %>% select(GO.Term, P.value, Genes) %>% slice(c(23, 25, 34))
 gaa.reactome$Database <- "Reactome"
 gaa.enrichr <- rbind(gaa.gobiol, gaa.gomole, gaa.reactome)
+
 gaa.enrichr$Gene.Count <- map(gaa.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
 gaa.enrichr$Log.pvalue <- -(log10(gaa.enrichr$P.value))
 
@@ -450,19 +474,19 @@ write.xlsx(modules.out, "modules_out.xlsx")
 
 source("../../code/GO/enrichr.R")
 enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "WikiPathways_2016", "Reactome_2016", "BioCarta_2016", "PPI_Hub_Proteins", "HumanCyc_2016", "NCI-Nature_2016", "Panther_2016")
-#enrichr.submit("blue", modules.out, enrichr.terms, FALSE)
+enrichr.submit("pink", modules.out, enrichr.terms, FALSE)
 color.names <- unique(module.colors) %>% sort
 l_ply(color.names, enrichr.submit, modules.out, enrichr.terms, FALSE)
 
-modules.out.reduce <- filter(modules.out, module.color != "grey")
-modules.out.reduce$module.color %<>% droplevels
+#modules.out.reduce <- filter(modules.out, module.color != "grey")
+#modules.out.reduce$module.color %<>% droplevels
 
-split(modules.out.reduce, modules.out.reduce$module.color) %>% map(submit.stringdb)
+#split(modules.out.reduce, modules.out.reduce$module.color) %>% map(submit.stringdb)
 
-submit.stringdb <- function(module.subset)
-{
-    get.stringdb(module.subset, unique(module.subset$module.color), "./stringdb")
-}
+#submit.stringdb <- function(module.subset)
+#{
+    #get.stringdb(module.subset, unique(module.subset$module.color), "./stringdb")
+#}
 
 connectivity.reduce <- filter(eigengene.connectivity, module.color != "grey" & module.comparison != "grey" & module.color == module.comparison)
 
@@ -486,10 +510,152 @@ dim(text.matrix.traits) = dim(module.traits.cor)
 
 gen.text.heatmap(module.traits.cor, text.matrix.traits, colnames(module.traits.cor), colnames(ME.genes), "", "module-trait relationships")
 
-plot.eigencor("salmon", "GAA1", ME.genes, lumi.cleaned$GAA1)
-plot.eigencor("brown", "GAA1", ME.genes, lumi.cleaned$GAA1)
+ME.genes.plot <- ME.genes
+colnames(ME.genes.plot) %<>% str_replace_all("ME", "")
+plot.eigencor("yellow", "GAA1", ME.genes.plot, lumi.cleaned$GAA1)
+plot.eigencor("brown", "GAA1", ME.genes.plot, lumi.cleaned$GAA1)
+plot.eigencor("greenyellow", "GAA1", ME.genes.plot, lumi.cleaned$GAA1)
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()
 unlist(test) %>% sort
 
+get.kappa <- function(term.current, all.terms)
+{
+    map(all.terms, cbind, term.current) %>% map(kappa2) %>% map_dbl(getElement, "value")
+}
+
+get.kappa.cluster <- function(enrichr.output, gene.names, filename)
+{
+    num.genes <- length(gene.names)
+    enrichr.list <- map(enrichr.output$Genes, str_split, ",") %>% map(getElement, 1) 
+    enrichr.match <- map(enrichr.list, is.element, el = toupper(gene.names)) %>% reduce(rbind) %>% t
+    rownames(enrichr.match) <- toupper(gene.names)
+    colnames(enrichr.match) <- enrichr.output$Term
+    enrichr.match.df <- data.frame(enrichr.match)
+
+    enrichr.kappa <- map(enrichr.match.df, get.kappa, enrichr.match.df) %>% reduce(rbind)
+    enrichr.kappa[enrichr.kappa < 0] <- 0
+
+    rownames(enrichr.kappa) <- colnames(enrichr.kappa) <- enrichr.output$Term
+
+    CairoPDF(str_c(filename, "heatmap", sep = "."), width = 30, height = 30)
+    heatmap.plus(enrichr.kappa, col = heat.colors(40), symm = TRUE, margins = c(20,20))
+    dev.off()
+
+    kappa.dist <- dist(enrichr.kappa, method = "manhattan")
+    kappa.clust <- hclust(kappa.dist, method = "average")
+
+    CairoPDF(str_c(filename, "clust", sep = "."), height = 30, width = 30)
+    plot(kappa.clust)
+    dev.off()
+
+    kappa.modules <- cutreeDynamic(kappa.clust, minClusterSize = 2, method = "tree")
+    kappa.modules.TOM <- cutreeDynamic(kappa.clust, distM = TOMdist(enrichr.kappa), minClusterSize = 2, method = "hybrid")
+    kappa.modules.df <- data.frame(Term = rownames(enrichr.kappa), Module = kappa.modules, Module.TOM = kappa.modules.TOM)
+
+    enrichr.output$Module <- kappa.modules
+    enrichr.output$Module.TOM <- kappa.modules.TOM
+    enrichr.output %<>% select(Index:Combined.Score, Module:Module.TOM, Genes)
+    
+    wb <- createWorkbook()
+    addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
+    writeDataTable(wb = wb, sheet = 1, x = enrichr.output, withFilter = TRUE)
+    freezePane(wb, 1, firstRow = TRUE)
+    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
+    setColWidths(wb, 1, cols = c(1, 3:ncol(enrichr.output)), widths = "auto")
+    setColWidths(wb, 1, cols = 2, widths = 45)
+    
+    saveWorkbook(wb, str_c(filename, "table.xlsx", sep = "."), overwrite = TRUE) 
+}
+
+yellow.only <- filter(modules.out, module.color == "yellow")
+yellow.gobiol.file <- "./enrichr/yellow/yellow_GO_Biological_Process_2015.xlsx"
+yellow.gobiol <- read.xlsx(yellow.gobiol.file) 
+yellow.gobiol$Num.Genes <- map(yellow.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+yellow.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
+yellow.gobiol$Database <- "GO Biological Process"
+get.kappa.cluster(yellow.gobiol, yellow.only$Symbol, file_path_sans_ext(yellow.gobiol.file))
+yellow.gobiol.final <- slice(yellow.gobiol, c(52, 63))
+
+yellow.gomole.file <- "./enrichr/yellow/yellow_GO_Molecular_Function_2015.xlsx"
+yellow.gomole <- read.xlsx(yellow.gomole.file) 
+yellow.gomole$Num.Genes <- map(yellow.gomole$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+yellow.gomole %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
+yellow.gomole$Database <- "GO Molecular Function"
+get.kappa.cluster(yellow.gomole, yellow.only$Symbol, file_path_sans_ext(yellow.gomole.file))
+yellow.gomole.final <- slice(yellow.gomole, c(12))
+
+yellow.reactome.file <- "./enrichr/yellow/yellow_Reactome_2016.xlsx"
+yellow.reactome <- read.xlsx(yellow.reactome.file) 
+yellow.reactome$Num.Genes <- map(yellow.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+yellow.reactome %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
+yellow.reactome$Database <- "Reactome"
+get.kappa.cluster(yellow.reactome, yellow.only$Symbol, file_path_sans_ext(yellow.reactome.file))
+yellow.reactome.final <- slice(yellow.reactome, 29)
+
+yellow.kegg <- read.xlsx("./enrichr/yellow/yellow_KEGG_2016.xlsx") %>% slice(2)
+yellow.kegg$Num.Genes <- map(yellow.kegg$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+yellow.kegg$Database <- "KEGG"
+
+yellow.enrichr <- rbind(yellow.gobiol.final, yellow.gomole.final, yellow.reactome.final, yellow.kegg)
+gen.enrichrplot(yellow.enrichr, "yellow.enrichr")
+
+#get kegg
+
+brown.only <- filter(modules.out, module.color == "brown")
+brown.gobiol.file <- "./enrichr/brown/brown_GO_Biological_Process_2015.xlsx"
+brown.gobiol <- read.xlsx(brown.gobiol.file) 
+brown.gobiol$Num.Genes <- map(brown.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+brown.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
+brown.gobiol$Database <- "GO Biological Process"
+get.kappa.cluster(brown.gobiol, brown.only$Symbol, file_path_sans_ext(brown.gobiol.file))
+brown.gobiol.final <- slice(brown.gobiol, c(31, 43))
+
+brown.gomole.file <- "./enrichr/brown/brown_GO_Molecular_Function_2015.xlsx"
+brown.gomole <- read.xlsx(brown.gomole.file) 
+brown.gomole$Num.Genes <- map(brown.gomole$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+brown.gomole %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
+brown.gomole$Database <- "GO Molecular Function"
+get.kappa.cluster(brown.gomole, brown.only$Symbol, file_path_sans_ext(brown.gomole.file))
+brown.gomole.final <- slice(brown.gomole, c(18, 14))
+
+brown.reactome.file <- "./enrichr/brown/brown_Reactome_2016.xlsx"
+brown.reactome <- read.xlsx(brown.reactome.file) 
+brown.reactome$Num.Genes <- map(brown.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+brown.reactome %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
+brown.reactome$Database <- "Reactome"
+get.kappa.cluster(brown.reactome, brown.only$Symbol, file_path_sans_ext(brown.reactome.file))
+brown.reactome.final <- slice(brown.reactome, c(11))
+
+#get kegg
+
+brown.enrichr <- rbind(brown.gobiol.final, brown.gomole.final, brown.reactome.final)
+gen.enrichrplot(brown.enrichr, "brown.enrichr")
+
+greenyellow.only <- filter(modules.out, module.color == "greenyellow")
+greenyellow.gobiol.file <- "./enrichr/greenyellow/greenyellow_GO_Biological_Process_2015.xlsx"
+greenyellow.gobiol <- read.xlsx(greenyellow.gobiol.file) 
+greenyellow.gobiol$Num.Genes <- map(greenyellow.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+greenyellow.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
+greenyellow.gobiol$Database <- "GO Biological Process"
+get.kappa.cluster(greenyellow.gobiol, greenyellow.only$Symbol, file_path_sans_ext(greenyellow.gobiol.file))
+greenyellow.gobiol.final <- slice(greenyellow.gobiol, c(5, 34, 29, 39))
+
+greenyellow.gomole.file <- "./enrichr/greenyellow/greenyellow_GO_Molecular_Function_2015.xlsx"
+greenyellow.gomole <- read.xlsx(greenyellow.gomole.file) 
+greenyellow.gomole$Num.Genes <- map(greenyellow.gomole$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+greenyellow.gomole %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
+greenyellow.gomole$Database <- "GO Molecular Function"
+get.kappa.cluster(greenyellow.gomole, greenyellow.only$Symbol, file_path_sans_ext(greenyellow.gomole.file))
+greenyellow.molec.final <- slice(greenyellow.gomole, c(1, 3))
+
+greenyellow.reactome.file <- "./enrichr/greenyellow/greenyellow_Reactome_2016.xlsx"
+greenyellow.reactome <- read.xlsx(greenyellow.reactome.file) 
+greenyellow.reactome$Num.Genes <- map(greenyellow.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+greenyellow.reactome %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
+greenyellow.reactome$Database <- "Reactome"
+get.kappa.cluster(greenyellow.reactome, greenyellow.only$Symbol, file_path_sans_ext(greenyellow.reactome.file))
+
+greenyellow.final <- rbind(greenyellow.gobiol.final, greenyellow.molec.final)
+gen.enrichrplot(greenyellow.final, "greenyellow.enrichr")
