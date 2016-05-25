@@ -1,5 +1,6 @@
 #String operations
 library(stringr)
+library(tools)
 
 #Reading and writing tables
 library(readr)
@@ -8,6 +9,7 @@ library(openxlsx)
 #For plotting
 library(ggplot2)
 library(Cairo)
+library(heatmap.plus)
 
 #For microarray stuff
 library(Biobase)
@@ -19,6 +21,7 @@ library(annotate)
 library(WGCNA)
 library(sva)
 library(limma)
+library(irr)
 
 #Longitudinal Analysis
 library(fastICA)
@@ -397,28 +400,139 @@ return(symbols.subnet)
 
 saveRDS.gz(intensities.ica.genes, "./save/intensities.ica.genes.rda")
 
-#X1 GO
-X1.biol <- read.xlsx("./enrichr/intensities.mean/Patient/X1/GO_Biological_Process_2015.xlsx") %>% slice(c(2, 18))
-X1.biol$Database <- "GO Biological Process"
-X1.molec <- read.xlsx("./enrichr/intensities.mean/Patient/X1/GO_Molecular_Function_2015.xlsx") %>% slice(c(5, 6))
-X1.molec$Database <- "GO Molecular Function"
-X1.reactome <- read.xlsx("./enrichr/intensities.mean/Patient/X1/Reactome_2016.xlsx") %>% slice(1)
-X1.reactome$Database <- "Reactome"
-X1.enrichr <- rbind(X1.biol, X1.molec, X1.reactome)
+get.kappa <- function(term.current, all.terms)
+{
+    map(all.terms, cbind, term.current) %>% map(kappa2) %>% map_dbl(getElement, "value")
+}
 
+get.kappa.cluster <- function(enrichr.output, gene.names, filename)
+{
+    num.genes <- length(gene.names)
+    enrichr.list <- map(enrichr.output$Genes, str_split, ",") %>% map(getElement, 1) 
+    enrichr.match <- map(enrichr.list, is.element, el = toupper(gene.names)) %>% reduce(rbind) %>% t
+    rownames(enrichr.match) <- toupper(gene.names)
+    colnames(enrichr.match) <- enrichr.output$Term
+    enrichr.match.df <- data.frame(enrichr.match)
+
+    enrichr.kappa <- map(enrichr.match.df, get.kappa, enrichr.match.df) %>% reduce(rbind)
+    enrichr.kappa[enrichr.kappa < 0] <- 0
+
+    rownames(enrichr.kappa) <- colnames(enrichr.kappa) <- enrichr.output$Term
+
+    CairoPDF(str_c(filename, "heatmap", sep = "."), width = 30, height = 30)
+    heatmap.plus(enrichr.kappa, col = heat.colors(40), symm = TRUE, margins = c(20,20))
+    dev.off()
+
+    kappa.dist <- dist(enrichr.kappa, method = "manhattan")
+    kappa.clust <- hclust(kappa.dist, method = "average")
+
+    CairoPDF(str_c(filename, "clust", sep = "."), height = 30, width = 30)
+    plot(kappa.clust)
+    dev.off()
+
+    kappa.modules <- cutreeDynamic(kappa.clust, minClusterSize = 2, method = "tree")
+    kappa.modules.TOM <- cutreeDynamic(kappa.clust, distM = TOMdist(enrichr.kappa), minClusterSize = 2, method = "hybrid")
+    kappa.modules.df <- data.frame(Term = rownames(enrichr.kappa), Module = kappa.modules, Module.TOM = kappa.modules.TOM)
+
+    enrichr.output$Module <- kappa.modules
+    enrichr.output$Module.TOM <- kappa.modules.TOM
+    enrichr.output %<>% select(Index:Combined.Score, Module:Module.TOM, Genes)
+    
+    wb <- createWorkbook()
+    addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
+    writeDataTable(wb = wb, sheet = 1, x = enrichr.output, withFilter = TRUE)
+    freezePane(wb, 1, firstRow = TRUE)
+    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
+    setColWidths(wb, 1, cols = c(1, 3:ncol(enrichr.output)), widths = "auto")
+    setColWidths(wb, 1, cols = 2, widths = 45)
+    
+    saveWorkbook(wb, str_c(filename, "table.xlsx", sep = "."), overwrite = TRUE) 
+}
+
+#X1 GO
+X1.gobiol.file <- "./enrichr/intensities.mean/Patient/X1/GO_Biological_Process_2015.xlsx"
+X1.gobiol <- read.xlsx(X1.gobiol.file)
+X1.gobiol$Database <- "GO Biological Process"
+X1.gobiol$Num.Genes <- map(X1.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X1.gobiol.filter <- filter(X1.gobiol, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(X1.gobiol.filter, intensities.ica.genes$Patient$X1$Symbol, file_path_sans_ext(X1.gobiol.file))
+X1.gobiol.final <- slice(X1.gobiol, c(13, 18, 62, 16))
+
+X1.gomolec.file <- "./enrichr/intensities.mean/Patient/X1/GO_Molecular_Function_2015.xlsx"
+X1.gomolec <- read.xlsx(X1.gomolec.file)
+X1.gomolec$Database <- "GO Molecular Function"
+X1.gomolec$Num.Genes <- map(X1.gomolec$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X1.gomolec.filter <- filter(X1.gomolec, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(X1.gomolec.filter, intensities.ica.genes$Patient$X1$Symbol, file_path_sans_ext(X1.gomolec.file))
+X1.gomolec.final <- slice(X1.gomolec, 6)
+
+X1.reactome.file <- "./enrichr/intensities.mean/Patient/X1/Reactome_2016.xlsx"
+X1.reactome <- read.xlsx(X1.reactome.file)
+X1.reactome$Database <- "Reactome"
+X1.reactome$Num.Genes <- map(X1.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X1.reactome.filter <- filter(X1.reactome, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(X1.reactome.filter, intensities.ica.genes$Patient$X1$Symbol, file_path_sans_ext(X1.reactome.file))
+X1.reactome.final <- slice(X1.reactome, 1)
+
+X1.kegg <- read.xlsx("./enrichr/intensities.mean/Patient/X1/KEGG_2016.xlsx") %>% slice(5)
+X1.kegg$Num.Genes <- map(X1.kegg$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X1.kegg$Database <- "KEGG"
+
+X1.enrichr <- rbind(X1.gobiol.final, X1.kegg, X1.reactome.final)
 gen.enrichrplot(X1.enrichr, "X1.enrichr")
 
-#X3 GO
-X3.biol <- read.xlsx("./enrichr/intensities.mean/Patient/X3/GO_Biological_Process_2015.xlsx") %>% slice(c(58,61))
-X3.biol$Database <- "GO Biological Process"
-X3.molec <- read.xlsx("./enrichr/intensities.mean/Patient/X3/GO_Molecular_Function_2015.xlsx") %>% slice(8)
-X3.molec$Database <- "GO Molecular Function"
-X3.reactome <- read.xlsx("./enrichr/intensities.mean/Patient/X3/Reactome_2016.xlsx") %>% slice(36)
-X3.reactome$Database <- "Reactome"
-X3.enrichr <- rbind(X3.biol, X3.molec, X3.reactome)
+#X2 - probably skip
+X2.gobiol.file <- "./enrichr/intensities.mean/Patient/X2/GO_Biological_Process_2015.xlsx"
+X2.gobiol <- read.xlsx(X2.gobiol.file)
+X2.gobiol$Database <- "GO Biological Process"
+X2.gobiol$Num.Genes <- map(X2.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X2.gobiol.filter <- filter(X2.gobiol, Num.Genes > 4) %>% filter(P.value < 0.01)
+get.kappa.cluster(X2.gobiol.filter, intensities.ica.genes$Patient$X2$Symbol, file_path_sans_ext(X2.gobiol.file))
 
+#X3 GO
+
+X3.gobiol.file <- "./enrichr/intensities.mean/Patient/X3/GO_Biological_Process_2015.xlsx"
+X3.gobiol <- read.xlsx(X3.gobiol.file)
+X3.gobiol$Database <- "GO Biological Process"
+X3.gobiol$Num.Genes <- map(X3.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X3.gobiol.filter <- filter(X3.gobiol, Num.Genes > 4) %>% filter(P.value < 0.001)
+get.kappa.cluster(X3.gobiol.filter, intensities.ica.genes$Patient$X3$Symbol, file_path_sans_ext(X3.gobiol.file))
+X3.gobiol.final <- slice(X3.gobiol, c(39, 49, 61))
+
+X3.gomolec.file <- "./enrichr/intensities.mean/Patient/X3/GO_Molecular_Function_2015.xlsx"
+X3.gomolec <- read.xlsx(X3.gomolec.file)
+X3.gomolec$Database <- "GO Molecular Function"
+X3.gomolec$Num.Genes <- map(X3.gomolec$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X3.gomolec.filter <- filter(X3.gomolec, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(X3.gomolec.filter, intensities.ica.genes$Patient$X3$Symbol, file_path_sans_ext(X3.gomolec.file))
+X3.gomolec.final <- slice(X3.gomolec, c(8,19))
+
+X3.reactome.file <- "./enrichr/intensities.mean/Patient/X3/Reactome_2016.xlsx"
+X3.reactome <- read.xlsx(X3.reactome.file)
+X3.reactome$Database <- "Reactome"
+X3.reactome$Num.Genes <- map(X3.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X3.reactome.filter <- filter(X3.reactome, Num.Genes > 4) %>% filter(P.value < 0.01)
+get.kappa.cluster(X3.reactome.filter, intensities.ica.genes$Patient$X3$Symbol, file_path_sans_ext(X3.reactome.file))
+X3.reactome.final <- slice(X3.reactome, c(36, 38))
+X3.enrichr <- rbind(X3.gobiol.final, X3.gomolec.final, X3.reactome.final)
 gen.enrichrplot(X3.enrichr, "X3.enrichr")
 
-ica.X1 <- match.exact(intensities.ica.genes$Patient$X1$Symbol)
+#X4
+X4.gobiol.file <- "./enrichr/intensities.mean/Patient/X4/GO_Biological_Process_2015.xlsx"
+X4.gobiol <- read.xlsx(X4.gobiol.file)
+X4.gobiol$Database <- "GO Biological Process"
+X4.gobiol$Num.Genes <- map(X4.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X4.gobiol.filter <- filter(X4.gobiol, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(X4.gobiol.filter, intensities.ica.genes$Patient$X4$Symbol, file_path_sans_ext(X4.gobiol.file))
+X4.gobiol.final <- slice(X4.gobiol, c(1, 14))
 
-intensities.X1 <- expr.means[grepl(ica.X1, rownames(expr.means)), ]
+X4.reactome.file <- "./enrichr/intensities.mean/Patient/X4/Reactome_2016.xlsx"
+X4.reactome <- read.xlsx(X4.reactome.file)
+X4.reactome$Database <- "Reactome"
+X4.reactome$Num.Genes <- map(X4.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+X4.reactome.filter <- filter(X4.reactome, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(X4.reactome.filter, intensities.ica.genes$Patient$X4$Symbol, file_path_sans_ext(X4.reactome.file))
+X4.reactome.final <- slice(X4.reactome, c(2,3))
+
+X4.enrichr <- rbind(X4.gobiol.final, X4.reactome.final)
+gen.enrichrplot(X4.enrichr, "X4.enrichr")

@@ -1,5 +1,8 @@
-library(peer)
+library(irr)
+library(tools)
+library(heatmap.plus)
 library(WGCNA)
+library(reshape2)
 enableWGCNAThreads()
 
 gen.cor <- function(dataset, trait.df)
@@ -49,36 +52,6 @@ gen.sdplot <- function(filename, dataset, maintitle)
     return(numbersd)
 }
 
-gen.peer <- function(num.factors, intensities, use.covariates, covariates)
-{
-    model = PEER()
-    PEER_setNk(model,num.factors)
-    PEER_setPhenoMean(model, as.matrix(t(intensities)))
-    PEER_setAdd_mean(model, TRUE)
-    if (use.covariates == TRUE)
-    {
-        PEER_setCovariates(model, as.matrix(covariates))
-    }
-    PEER_setNmax_iterations(model, 1000)
-    PEER_update(model)
-    residuals.PEER = t(PEER_getResiduals(model))
-    rownames(residuals.PEER) = rownames(intensities)
-    colnames(residuals.PEER) = colnames(intensities)
-
-    write.csv(data.frame(PEER_getX(model)), file = paste("factor_", num.factors, sep = "", ".csv"), row.names = FALSE)
-    write.csv(data.frame(PEER_getW(model)), file = paste("weight_", num.factors, sep = "", ".csv"), row.names = FALSE)
-    write.csv(data.frame(PEER_getAlpha(model)), file = paste("precision_", num.factors, sep = "", ".csv"), row.names = FALSE)
-    write.csv(residuals.PEER, file = paste("residuals_", num.factors, sep = "", ".csv"), row.names = FALSE)
-
-    CairoPDF(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
-    PEER_plotModel(model)
-    dev.off()
-
-    CairoPDF(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
-    plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
-    dev.off()
-}
-
 saveRDS.gz <- function(object,file,threads=parallel::detectCores()) {
   con <- pipe(paste0("pigz -p",threads," > ",file),"wb")
   saveRDS(object, file = con)
@@ -90,4 +63,70 @@ readRDS.gz <- function(file,threads=parallel::detectCores()) {
   object <- readRDS(file = con)
   close(con)
   return(object)
+}
+
+get.kappa <- function(term.current, all.terms)
+{
+    map(all.terms, cbind, term.current) %>% map(kappa2) %>% map_dbl(getElement, "value")
+}
+
+get.kappa.cluster <- function(enrichr.output, gene.names, filename)
+{
+    num.genes <- length(gene.names)
+    enrichr.list <- map(enrichr.output$Genes, str_split, ",") %>% map(getElement, 1) 
+    enrichr.match <- map(enrichr.list, is.element, el = toupper(gene.names)) %>% reduce(rbind) %>% t
+    rownames(enrichr.match) <- toupper(gene.names)
+    colnames(enrichr.match) <- enrichr.output$Term
+    enrichr.match.df <- data.frame(enrichr.match)
+
+    enrichr.kappa <- map(enrichr.match.df, get.kappa, enrichr.match.df) %>% reduce(rbind)
+    enrichr.kappa[enrichr.kappa < 0] <- 0
+
+    rownames(enrichr.kappa) <- colnames(enrichr.kappa) <- enrichr.output$Term
+
+    CairoPDF(str_c(filename, "heatmap", sep = "."), width = 30, height = 30)
+    heatmap.plus(enrichr.kappa, col = heat.colors(40), symm = TRUE, margins = c(20,20))
+    dev.off()
+
+    kappa.dist <- dist(enrichr.kappa, method = "manhattan")
+    kappa.clust <- hclust(kappa.dist, method = "average")
+
+    CairoPDF(str_c(filename, "clust", sep = "."), height = 30, width = 30)
+    plot(kappa.clust)
+    dev.off()
+
+    kappa.modules <- cutreeDynamic(kappa.clust, minClusterSize = 2, method = "tree")
+    kappa.modules.TOM <- cutreeDynamic(kappa.clust, distM = TOMdist(enrichr.kappa), minClusterSize = 2, method = "hybrid")
+    kappa.modules.df <- data.frame(Term = rownames(enrichr.kappa), Module = kappa.modules, Module.TOM = kappa.modules.TOM)
+
+    enrichr.output$Module <- kappa.modules
+    enrichr.output$Module.TOM <- kappa.modules.TOM
+    enrichr.output %<>% select(Index:Combined.Score, Module:Module.TOM, Genes)
+    
+    wb <- createWorkbook()
+    addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
+    writeDataTable(wb = wb, sheet = 1, x = enrichr.output, withFilter = TRUE)
+    freezePane(wb, 1, firstRow = TRUE)
+    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
+    setColWidths(wb, 1, cols = c(1, 3:ncol(enrichr.output)), widths = "auto")
+    setColWidths(wb, 1, cols = 2, widths = 45)
+    
+    saveWorkbook(wb, str_c(filename, "table.xlsx", sep = "."), overwrite = TRUE) 
+}
+
+gen.enrichrplot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8)
+{
+    enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+    enrichr.df$Log.pvalue <- -(log10(enrichr.df$P.value))
+    enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% str_replace_all("\\_.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
+    enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
+    enrichr.df %<>% arrange(Log.pvalue)
+    enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
+    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+
+    p <- ggplot(enrichr.df.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = enrichr.df$Format.Name, hjust = "left", aes(y = 0.1)) + coord_flip() + theme_bw() + theme(legend.position = "none")
+    p <- p + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+    CairoPDF(filename, height = plot.height, width = plot.width)
+    print(p)
+    dev.off()
 }

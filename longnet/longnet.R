@@ -9,17 +9,12 @@ library(openxlsx)
 library(ggplot2)
 
 #For microarray stuff
-library(Biobase)
-library(matrixStats)
-library(abind)
 library(lumi)
 library(lumiHumanAll.db)
-library(annotate)
 
 #Network Analysis
 library(minerva)
 library(minet)
-library(parallel)
 library(moments)
 library(Rgraphviz)
 library(flashClust)
@@ -31,45 +26,46 @@ library(magrittr)
 library(purrr)
 library(functional)
 library(Cairo)
+library(reshape2)
 
 #Data arrangement
-library(reshape2)
-library(plyr)
 library(dplyr)
 library(tidyr)
-library(doBy)
 
+source("../common_functions.R")
 
-saveRDS.gz <- function(object,file,threads=parallel::detectCores()) {
-  con <- pipe(paste0("pigz -p",threads," > ",file),"wb")
-  saveRDS(object, file = con)
-  close(con)
-}
-
-readRDS.gz <- function(file,threads=parallel::detectCores()) {
-  con <- pipe(paste0("pigz -d -c -p",threads," ",file))
-  object <- readRDS(file = con)
-  close(con)
-  return(object)
-}
-
-gen.enrichrplot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8)
+enrichr.submit <- function(index, full.df, enrichr.terms, use.weights)
 {
-    enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-    enrichr.df$Log.pvalue <- -(log10(enrichr.df$P.value))
-    enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% str_replace_all("\\_.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
-    enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
-    enrichr.df %<>% arrange(Log.pvalue)
-    enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
-    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
-
-    p <- ggplot(enrichr.df.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = enrichr.df$Format.Name, hjust = "left", aes(y = 0.1)) + coord_flip() + theme_bw() + theme(legend.position = "none")
-    p <- p + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-    CairoPDF(filename, height = plot.height, width = plot.width)
-    print(p)
-    dev.off()
+    dataset <- full.df[[index]]
+    dir.create(file.path("./enrichr", index), showWarnings = FALSE)
+    enrichr.data <- map(enrichr.terms, get.enrichrdata, dataset, FALSE)
+    enrichr.names <- enrichr.terms[!is.na(enrichr.data)]
+    enrichr.data <- enrichr.data[!is.na(enrichr.data)]
+    names(enrichr.data) <- enrichr.names
+    trap1 <- map(names(enrichr.data), enrichr.wkbk, enrichr.data, index)
 }
 
+enrichr.wkbk <- function(subindex, full.df, index)
+{
+    dataset <- full.df[[subindex]]
+    wb <- createWorkbook()
+    addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
+    writeDataTable(wb = wb, sheet = 1, x = dataset, withFilter = TRUE)
+    freezePane(wb, 1, firstRow = TRUE)
+    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
+    setColWidths(wb, 1, cols = c(1, 3:ncol(dataset)), widths = "auto")
+    setColWidths(wb, 1, cols = 2, widths = 45)
+
+    dir.create(file.path("./enrichr", index))
+    filename = paste("./enrichr/", index, "/", index, "_", subindex, ".xlsx", sep = "")
+    saveWorkbook(wb, filename, overwrite = TRUE) 
+}
+
+stringdb.submit <- function(module.color, module.df)
+{
+    module.genes <- module.df[[module.color]]
+    get.stringdb(module.genes, module.color, "./stringdb")
+}
 intensities.means <- readRDS.gz("../dtw/save/intensities.means.rda")
 intensities.ica.genes <- readRDS.gz("../ica/save/intensities.ica.genes.rda")
 dtw.cc <- readRDS.gz("../dtw/save/dtw.cc.rda")
@@ -103,6 +99,7 @@ test.name <- rownames(intensities.patient) %>% toupper %>% str_replace_all("\\-"
 test.name2 <- toupper(genes$Patient)
 
 mi.expr <- intensities.patient[match(genes$Patient, rownames(intensities.patient)),]
+mi.expr.random <- apply(mi.expr, 1, sample, 4) 
 
 #mi.empirical best
 #mi.empirical R^2 tie, steeper slope
@@ -130,99 +127,22 @@ CairoPDF("./gene_dendrogram_and_module_colors_min50", height = 10, width = 15)
 plotDendroAndColors(geneTree, dynamic.colors, "Dynamic Tree Cut", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05)
 dev.off()
 
-#Calculate module eigengenes
-#ME.list <- moduleEigengenes(mi.expr, colors = dynamic.colors, softPower = softPower, nPC = 1)
-#ME.genes <- ME.list$eigengenes
-#MEDiss <- 1 - cor(ME.genes)
-#METree <- flashClust(as.dist(MEDiss), method = "average")
-#saveRDS.gz(METree, file = "./save/me.tree.rda")
-
-#CairoPDF(paste("./module_eigengene_clustering_min50", status, sep = "_"), height = 10, width = 15)
-#plot(METree, xlab = "", sub = "", main = "")
-#dev.off()
-
-##Check if any modules are too similar and merge them.  Possibly not working.
-#ME.dissimilarity.threshold <- 0.20
-#merge.all <- mergeCloseModules(mi.expr, dynamic.colors, cutHeight = ME.dissimilarity.threshold, verbose = 3) #PC analysis may be failing because of Intel MKL Lapack routine bug.  Test with openBLAS in R compiled with gcc.
-#merged.colors <- merge.all$colors
-#merged.genes <- merge.all$newMEs
-
-#CairoPDF(paste("module_eigengene_clustering_min50", status, sep = "_"), height = 10, width = 15)
-#plotDendroAndColors(geneTree, cbind(dynamic.colors, merged.colors), c("Dynamic Tree Cut", "Merged dynamic"), dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "")
-#dev.off()
-
-#Use merged eigengenes 
-#module.colors <- merged.colors
-#saveRDS.gz(module.colors, file = "./save/module.colors.rda")
-#color.order <- c("grey", standardColors(50))
-#modules.labels <- match(module.colors, color.order)
-#saveRDS.gz(modules.labels, file = "./save/modules.labels.rda")
-#ME.genes <- merged.genes
-#saveRDS.gz(ME.genes, file = "./save/me.genes.rda")
-
-#all.degrees <- intramodularConnectivity(adjacency.PEER, module.colors)
-#fdata <- featureData(lumi.import)@data
-#colnames(fdata) %<>% tolower %>% capitalize
-#gene.info.join <- data.frame(nuID = featureNames(lumi.import), select(fdata, Accession, Symbol, Definition))
-#gene.info <- mutate(gene.info.join, module.colors = module.colors, mean.count = apply(expr.data.PEER, 2, mean)) %>% data.frame(all.degrees)
-
-#CairoPDF(paste("eigengenes", status, sep = "_"), height = 10, width = 18)
-#par(cex = 0.7)
-#plotEigengeneNetworks(ME.genes, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.adjacency = 0.3, cex.preservation = 0.3, plotPreservation = "standard")
-#dev.off()
-
 symbol.vector <- rownames(mi.expr) %>% str_replace("\\.", "\\-")
 module.expr.out <- data.frame(Symbol = symbol.vector, module.color = dynamic.colors)
 write.xlsx(module.expr.out, "./module_status.xlsx", sep = ".")
 return(module.expr.out)
 
-
 mi.networks <- lapply(names(genes), gen.mi, intensities.means, genes)
 mi.network <- gen.mi("Patient", intensities.means, genes)
-
-#names(mi.networks) <- names(genes.list)
-#saveRDS.gz(mi.networks, file = "./save/mi.networks.rda")
 
 module.patients <- read.xlsx("./module_status.xlsx")
 module.symbols <- split(module.patients, factor(module.patients$module.color))
 
 source("../../code/GO/enrichr.R")
-stringdb.submit <- function(module.color, module.df)
-{
-    module.genes <- module.df[[module.color]]
-    get.stringdb(module.genes, module.color, "./stringdb")
-}
 map(names(module.symbols), stringdb.submit, module.symbols)
 brown.stringdb <- get.stringdb(module.symbols$brown, "brown")
 blue.stringdb <- get.stringdb(module.symbols$blue, "blue", edge.threshold = 700)
 red.stringdb <- get.stringdb(module.symbols$red, "red", edge.threshold = 700)
-
-enrichr.submit <- function(index, full.df, enrichr.terms, use.weights)
-{
-    dataset <- full.df[[index]]
-    dir.create(file.path("./enrichr", index), showWarnings = FALSE)
-    enrichr.data <- map(enrichr.terms, get.enrichrdata, dataset, FALSE)
-    enrichr.names <- enrichr.terms[!is.na(enrichr.data)]
-    enrichr.data <- enrichr.data[!is.na(enrichr.data)]
-    names(enrichr.data) <- enrichr.names
-    trap1 <- map(names(enrichr.data), enrichr.wkbk, enrichr.data, index)
-}
-
-enrichr.wkbk <- function(subindex, full.df, index)
-{
-    dataset <- full.df[[subindex]]
-    wb <- createWorkbook()
-    addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
-    writeDataTable(wb = wb, sheet = 1, x = dataset, withFilter = TRUE)
-    freezePane(wb, 1, firstRow = TRUE)
-    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
-    setColWidths(wb, 1, cols = c(1, 3:ncol(dataset)), widths = "auto")
-    setColWidths(wb, 1, cols = 2, widths = 45)
-
-    dir.create(file.path("./enrichr", index))
-    filename = paste("./enrichr/", index, "/", index, "_", subindex, ".xlsx", sep = "")
-    saveWorkbook(wb, filename, overwrite = TRUE) 
-}
 
 enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "WikiPathways_2016", "Reactome_2016", "BioCarta_2016", "PPI_Hub_Proteins", "Humancyc_2016", "NCI-Nature_2016", "Panther_2016") 
 
@@ -232,142 +152,97 @@ test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'aut
 names(test) <- ls()
 unlist(test) %>% sort
 
-blue.biol <- read.xlsx("./enrichr/blue/blue_GO_Biological_Process_2015.xlsx")
-black.biol <- read.xlsx("./enrichr/black/black_GO_Biological_Process_2015.xlsx")
-brown.biol <- read.xlsx("./enrichr/brown/brown_GO_Biological_Process_2015.xlsx")
-green.biol <- read.xlsx("./enrichr/green/green_GO_Biological_Process_2015.xlsx")
-red.biol <- read.xlsx("./enrichr/red/red_GO_Biological_Process_2015.xlsx")
-turquoise.biol <- read.xlsx("./enrichr/turquoise/turquoise_GO_Biological_Process_2015.xlsx")
-yellow.biol <- read.xlsx("./enrichr/yellow/yellow_GO_Biological_Process_2015.xlsx")
+#black GO forget it
+black.gobiol.file <- "./enrichr/black/black_GO_Biological_Process_2015.xlsx"
+black.gobiol <- read.xlsx(black.gobiol.file)
+black.gobiol$Database <- "GO Biological Process"
+black.gobiol$Num.Genes <- map(black.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+black.gobiol.filter <- filter(black.gobiol, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(black.gobiol.filter, module.symbols$black$Symbol, file_path_sans_ext(black.gobiol.file))
 
-blue.expression <- blue.biol[27,]$Genes %>% str_split(",") %>% getElement(1) 
-blue.expr.clean <- blue.expression[!str_detect(blue.expression, "RPS|RPL")]
-
-black.expression <- black.biol[36,]$Genes %>% str_split(",") %>% getElement(1) 
-black.expr.clean <- black.expression[!str_detect(black.expression, "RPS|RPL")]
-
-brown.expression <- brown.biol[354,]$Genes %>% str_split(",") %>% getElement(1) 
-brown.expr.clean <- brown.expression[!str_detect(brown.expression, "RPS|RPL")]
-brown.epigenetic <- brown.biol[33,]$Genes %>% str_split(",") %>% getElement(1) 
-brown.epigenetic.clean <- brown.epigenetic[!str_detect(brown.epigenetic, "RPS|RPL")]
-brown.all <- c(brown.expr.clean, brown.epigenetic.clean) %>% unique
-
-red.expression <- red.biol[40,]$Genes %>% str_split(",") %>% getElement(1) 
-red.expr.clean <- red.expression[!str_detect(red.expression, "RPS|RPL")]
-red.posttranscript <- red.biol[251,]$Genes %>% str_split(",") %>% getElement(1) 
-red.trans.clean <- red.posttranscript[!str_detect(red.posttranscript, "RPS|RPL")]
-red.all <- c(red.expr.clean, red.trans.clean) %>% unique
-
-turquoise.expression <- turquoise.biol[20,]$Genes %>% str_split(",") %>% getElement(1) 
-turquoise.expr.clean <- turquoise.expression[!str_detect(turquoise.expression, "RPS|RPL")]
-turquoise.posttranscript <- turquoise.biol[120,]$Genes %>% str_split(",") %>% getElement(1) 
-turquoise.trans.clean <- turquoise.posttranscript[!str_detect(turquoise.posttranscript, "RPS|RPL")]
-turquoise.all <- c(turquoise.expr.clean, turquoise.trans.clean) %>% unique
-
-yellow.expression <- yellow.biol[207,]$Genes %>% str_split(",") %>% getElement(1) 
-yellow.expr.clean <- yellow.expression[!str_detect(yellow.expression, "RPS|RPL")]
-yellow.posttranscript <- yellow.biol[325,]$Genes %>% str_split(",") %>% getElement(1) 
-yellow.trans.clean <- yellow.posttranscript[!str_detect(yellow.posttranscript, "RPS|RPL")]
-yellow.all <- c(yellow.expr.clean, yellow.trans.clean) %>% unique
+black.reactome.file <- "./enrichr/black/black_Reactome_2016.xlsx"
+black.reactome <- read.xlsx(black.reactome.file)
+black.reactome$Database <- "Reactome"
+black.reactome$Num.Genes <- map(black.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+black.reactome.filter <- filter(black.reactome, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(black.reactome.filter, module.symbols$black$Symbol, file_path_sans_ext(black.reactome.file))
 
 #blue GO
-blue.molec <- read.xlsx("./enrichr/blue/blue_GO_Molecular_Function.xlsx") %>% slice(1)
-blue.molec$Database <- "GO Molecular Function"
-blue.kegg <- read.xlsx("./enrichr/blue/blue_KEGG_2015.xlsx") %>% slice(3)
-blue.kegg$Database <- "KEGG"
-blue.reactome <- read.xlsx("./enrichr/blue/blue_Reactome_2015.xlsx") %>% slice(c(3,9))
+blue.gobiol.file <- "./enrichr/blue/blue_GO_Biological_Process_2015.xlsx"
+blue.gobiol <- read.xlsx(blue.gobiol.file)
+blue.gobiol$Database <- "GO Biological Process"
+blue.gobiol$Num.Genes <- map(blue.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+blue.gobiol.filter <- filter(blue.gobiol, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(blue.gobiol.filter, module.symbols$blue$Symbol, file_path_sans_ext(blue.gobiol.file))
+blue.gobiol.final <- slice(blue.gobiol, c(4, 57, 66, 77))
+
+blue.reactome.file <- "./enrichr/blue/blue_Reactome_2016.xlsx"
+blue.reactome <- read.xlsx(blue.reactome.file)
 blue.reactome$Database <- "Reactome"
-blue.enrichr <- rbind(blue.molec, blue.kegg, blue.reactome)
-blue.enrichr$Gene.Count <- map(blue.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-blue.enrichr$Log.pvalue <- -(log10(blue.enrichr$P.value))
+blue.reactome$Num.Genes <- map(blue.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+blue.reactome.filter <- filter(blue.reactome, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(blue.reactome.filter, module.symbols$blue$Symbol, file_path_sans_ext(blue.reactome.file))
+blue.reactome.final <- slice(blue.reactome, 33)
 
-blue.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
-blue.enrichr$Format.Name <- paste(blue.enrichr$Database, ": ", blue.enrichr$GO.Term, " (", blue.enrichr$Gene.Count, ")", sep = "")
-blue.enrichr.plot <- select(blue.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+blue.enrichr <- rbind(blue.gobiol.final, blue.reactome.final)
+gen.enrichrplot(blue.enrichr, "blue.enrichr")
 
-p <- ggplot(blue.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = blue.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
-p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-CairoPDF("blue.enrichr", height = 5, width = 11)
-print(p)
-dev.off()
+#brown GO ??? maybe
+brown.gobiol.file <- "./enrichr/brown/brown_GO_Biological_Process_2015.xlsx"
+brown.gobiol <- read.xlsx(brown.gobiol.file)
+brown.gobiol$Database <- "GO Biological Process"
+brown.gobiol$Num.Genes <- map(brown.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+brown.gobiol.filter <- filter(brown.gobiol, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(brown.gobiol.filter, module.symbols$brown$Symbol, file_path_sans_ext(brown.gobiol.file))
 
-#brown GO
-brown.biol <- read.xlsx("./enrichr/brown/brown_GO_Biological_Process_2015.xlsx") %>% slice(c(1,55))
-brown.biol$Database <- "GO Biological Process"
-brown.reactome <- read.xlsx("./enrichr/brown/brown_Reactome_2016.xlsx") %>% slice(1)
-brown.reactome$Database <- "Reactome"
-brown.enrichr <- rbind(brown.biol, brown.reactome)
-
-gen.enrichrplot(brown.enrichr, "brown.enrichr")
+#green GO
+green.gobiol.file <- "./enrichr/green/green_GO_Biological_Process_2015.xlsx"
+green.gobiol <- read.xlsx(green.gobiol.file)
+green.gobiol$Database <- "GO Biological Process"
+green.gobiol$Num.Genes <- map(green.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+green.gobiol.filter <- filter(green.gobiol, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(green.gobiol.filter, module.symbols$green$Symbol, file_path_sans_ext(green.gobiol.file))
 
 #red GO
-red.biol <- read.xlsx("./enrichr/red/red_GO_Biological_Process.xlsx") %>% slice(c(1,2,6))
-red.biol$Database <- "GO Biological Process"
-red.molec <- read.xlsx("./enrichr/red/red_GO_Molecular_Function.xlsx") %>% slice(2)
-red.molec$Database <- "GO Molecular Function"
-red.kegg <- read.xlsx("./enrichr/red/red_KEGG_2015.xlsx") %>% slice(1)
-red.kegg$Database <- "KEGG"
-red.reactome <- read.xlsx("./enrichr/red/red_Reactome_2015.xlsx") %>% slice(1)
+red.gobiol.file <- "./enrichr/red/red_GO_Biological_Process_2015.xlsx"
+red.gobiol <- read.xlsx(red.gobiol.file)
+red.gobiol$Database <- "GO Biological Process"
+red.gobiol$Num.Genes <- map(red.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+red.gobiol.filter <- filter(red.gobiol, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(red.gobiol.filter, module.symbols$red$Symbol, file_path_sans_ext(red.gobiol.file))
+
+red.reactome.file <- "./enrichr/red/red_Reactome_2016.xlsx"
+red.reactome <- read.xlsx(red.reactome.file)
 red.reactome$Database <- "Reactome"
-red.enrichr <- rbind(red.biol, red.molec, red.kegg, red.reactome)
-red.enrichr$Gene.Count <- map(red.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-red.enrichr$Log.pvalue <- -(log10(red.enrichr$P.value))
-
-red.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
-red.enrichr$Format.Name <- paste(red.enrichr$Database, ": ", red.enrichr$GO.Term, " (", red.enrichr$Gene.Count, ")", sep = "")
-red.enrichr.plot <- select(red.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
-
-p <- ggplot(red.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = red.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
-p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-CairoPDF("red.enrichr", height = 5, width = 8)
-print(p)
-dev.off()
+red.reactome$Num.Genes <- map(red.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+red.reactome.filter <- filter(red.reactome, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(red.reactome.filter, module.symbols$red$Symbol, file_path_sans_ext(red.reactome.file))
 
 #turquoise GO
-turquoise.biol <- read.xlsx("./enrichr/turquoise/turquoise_GO_Biological_Process.xlsx") %>% slice(1)
-turquoise.biol$Database <- "GO Biological Process"
-turquoise.reactome <- read.xlsx("./enrichr/turquoise/turquoise_Reactome_2015.xlsx") %>% slice(1)
+turquoise.gobiol.file <- "./enrichr/turquoise/turquoise_GO_Biological_Process_2015.xlsx"
+turquoise.gobiol <- read.xlsx(turquoise.gobiol.file)
+turquoise.gobiol$Database <- "GO Biological Process"
+turquoise.gobiol$Num.Genes <- map(turquoise.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+turquoise.gobiol.filter <- filter(turquoise.gobiol, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(turquoise.gobiol.filter, module.symbols$turquoise$Symbol, file_path_sans_ext(turquoise.gobiol.file))
+turquoise.gobiol.final <- slice(turquoise.gobiol, c(1, 32, 37, 94, 103))
+
+turquoise.reactome.file <- "./enrichr/turquoise/turquoise_Reactome_2016.xlsx"
+turquoise.reactome <- read.xlsx(turquoise.reactome.file)
 turquoise.reactome$Database <- "Reactome"
-turquoise.enrichr <- rbind(turquoise.biol, turquoise.reactome)
-turquoise.enrichr$Gene.Count <- map(turquoise.enrichr$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-turquoise.enrichr$Log.pvalue <- -(log10(turquoise.enrichr$P.value))
+turquoise.reactome$Num.Genes <- map(turquoise.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+turquoise.reactome.filter <- filter(turquoise.reactome, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(turquoise.reactome.filter, module.symbols$turquoise$Symbol, file_path_sans_ext(turquoise.reactome.file))
+turquoise.reactome.final <- slice(turquoise.reactome, 28)
 
-turquoise.enrichr$GO.Term %<>% str_replace_all("\\ \\(.*$", "") %>% tolower
-turquoise.enrichr$Format.Name <- paste(turquoise.enrichr$Database, ": ", turquoise.enrichr$GO.Term, " (", turquoise.enrichr$Gene.Count, ")", sep = "")
-turquoise.enrichr.plot <- select(turquoise.enrichr, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+turquoise.enrichr <- rbind(turquoise.gobiol.final, turquoise.reactome.final)
+gen.enrichrplot(turquoise.enrichr, "turquoise.enrichr")
 
-p <- ggplot(turquoise.enrichr.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = turquoise.enrichr$Format.Name, hjust = "left", aes(y = 0.1))
-p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "FALSE",  panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-CairoPDF("turquoise.enrichr", height = 5, width = 8)
-print(p)
-dev.off()
+#yellow
+yellow.gobiol.file <- "./enrichr/yellow/yellow_GO_Biological_Process_2015.xlsx"
+yellow.gobiol <- read.xlsx(yellow.gobiol.file)
+yellow.gobiol$Database <- "GO Biological Process"
+yellow.gobiol$Num.Genes <- map(yellow.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+yellow.gobiol.filter <- filter(yellow.gobiol, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(yellow.gobiol.filter, module.symbols$yellow$Symbol, file_path_sans_ext(yellow.gobiol.file))
 
-#mi.expr.df <- slice(intensities.patient, match(genes$Patient, Probe_Id)) 
-#rownames(mi.expr.df) <- mi.expr.df$Probe_Id
-#mi.expr <- select(mi.expr.df, -Probe_Id) %>% t
-
-#mi.mrnet <- minet(mi.expr, method = "mrnet", estimator = "mi.shrink", disc = "equalwidth")
-#TOM.PEER <- TOMsimilarity(mi.mrnet, verbose = 5)
-#colnames(TOM.PEER) <- mi.expr.df$Probe_Id
-#rownames(TOM.PEER) <- mi.expr.df$Probe_Id
-#TOM.pruned <- TOM.PEER
-#TOM.pruned[TOM.pruned < 0.001] <- 0
-
-#scaleFreePlot(TOM.pruned)
-
-#mi.graph <- graph_from_adjacency_matrix(TOM.PEER, mode = "undirected", weighted = TRUE, diag = FALSE, add.colnames = TRUE)
-#vertex_attr(mi.graph)$name <- mi.expr.df$Probe_Id
-#edge.weights <- edge_attr(mi.graph, "weight")
-#pruned.subnet <- delete.edges(mi.graph, which(edge.weights < .1))
-#num.edges <- map(1:vcount(pruned.subnet), incident, graph = pruned.subnet) %>% map_dbl(length) 
-#pruned.subnet2 <- delete.vertices(pruned.subnet, which(num.edges == 0))
-#vertex.colors <- rainbow(vcount(pruned.subnet2))
-#V(pruned.subnet2)$color <- vertex.colors
-##edge.df <- data.frame(edge_attr(symbols.subnet))
-##edge.thickness <- edge.df$combined_score / 200
-#comp.membership <- components(pruned.subnet2)$membership
-#component1 <- delete.vertices(pruned.subnet2, which(comp.membership != 1))
-
-#CairoPDF("mi.network", width = 30, height = 30)
-#plot.igraph(component1, vertex.size = 2, vertex.label.dist = 0.12, vertex.label.degree = -pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = "#0000FF99")
-#dev.off()

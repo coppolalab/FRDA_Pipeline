@@ -290,12 +290,13 @@ dev.off()
 
 #Correlations
 gaa.cor <- apply(expr.collapse, 1, cor, lumi.cleaned$GAA1)
-gaa.cor.pval <- corPvalueStudent(gaa.cor, length(lumi.cleaned$GAA1)) %>% p.adjust("fdr")
-cor.df <- cbind(gaa.cor, gaa.cor.pval) %>% data.frame
-colnames(cor.df) <- c("Correlation", "P.value")
+gaa.cor.pval <- corPvalueStudent(gaa.cor, length(lumi.cleaned$GAA1)) 
+gaa.cor.adjpval <- p.adjust(gaa.cor.pval, "fdr")
+cor.df <- cbind(gaa.cor, gaa.cor.pval, gaa.cor.adjpval) %>% data.frame
+colnames(cor.df) <- c("Correlation", "P.value", "Adj.P.value")
 cor.df$Symbol <- rownames(expr.collapse)
 cor.df %<>% arrange(P.value)
-cor.df.sg <- filter(cor.df, P.value < 0.05)
+cor.df.sg <- filter(cor.df, Adj.P.value < 0.05)
 write.xlsx(cor.df.sg, "significant_gaa.xlsx")
 write.xlsx(cor.df, "all.gaa.xlsx")
 

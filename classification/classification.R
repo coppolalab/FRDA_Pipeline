@@ -393,6 +393,7 @@ sc.pca <- pamr.train(pca.data)
 sc.pca.cv <- pamr.cv(fit = sc.pca, data = pca.data, nfold = 3)
 num.genes.pca <- cbind(sc.pca.cv$threshold, sc.pca.cv$size, (1 - sc.pca.cv$error)) %>% data.frame
 colnames(num.genes.pca) <- c("Threshold", "Num.Genes", "Accuracy")
+
 pca.500 <- filter(num.genes.pca, Num.Genes <= 500 & Num.Genes > 0)
 pca.500.genes <- map(pca.500$Threshold, get.genelists, fit = sc.pca, data = pca.data)
 write.xlsx(pca.500.genes[[which.max(pca.500$Accuracy)]], "sc.pca.xlsx")
@@ -403,6 +404,7 @@ sc.pco <- pamr.train(pco.data)
 sc.pco.cv <- pamr.cv(fit = sc.pco, data = pco.data, nfold = 3)
 num.genes.pco <- cbind(sc.pco.cv$threshold, sc.pco.cv$size, (1 - sc.pco.cv$error)) %>% data.frame
 colnames(num.genes.pco) <- c("Threshold", "Num.Genes", "Accuracy")
+
 pco.500 <- filter(num.genes.pco, Num.Genes <= 500 & Num.Genes > 0)
 pco.500.genes <- map(pco.500$Threshold, get.genelists, fit = sc.pco, data = pco.data)
 write.xlsx(pco.500.genes[[which.max(pco.500$Accuracy)]], "sc.pco.xlsx")
@@ -413,6 +415,7 @@ sc.cc <- pamr.train(cc.data)
 sc.cc.cv <- pamr.cv(fit = sc.cc, data = cc.data, nfold = 3)
 num.genes.cc <- cbind(sc.cc.cv$threshold, sc.cc.cv$size, (1 - sc.cc.cv$error)) %>% data.frame
 colnames(num.genes.cc) <- c("Threshold", "Num.Genes", "Accuracy")
+
 cc.500 <- filter(num.genes.cc, Num.Genes <= 500 & Num.Genes > 0)
 cc.500.genes <- map(cc.500$Threshold, get.genelists, fit = sc.cc, data = cc.data)
 write.xlsx(cc.500.genes[[which.max(cc.500$Accuracy)]], "sc.cc.xlsx")

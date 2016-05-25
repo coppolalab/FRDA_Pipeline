@@ -1,5 +1,6 @@
 #String operations
 library(stringr)
+library(tools)
 
 #Reading and writing tables
 library(readr)
@@ -21,6 +22,7 @@ library(limma)
 
 #Longitudinal analysis
 library(dtw)
+library(irr)
 
 #Plotting
 library(Cairo)
@@ -508,41 +510,93 @@ get.kappa.cluster <- function(enrichr.output, gene.names, filename)
     saveWorkbook(wb, str_c(filename, "table.xlsx", sep = "."), overwrite = TRUE) 
 }
 
-yellow.only <- filter(modules.out, module.color == "yellow")
+pca.gobiol.file <- "./enrichr/pca.mean/GO_Biological_Process_2015.xlsx" 
+pca.gobiol <- read.xlsx(pca.gobiol.file)
+pca.gobiol$Num.Genes <- map(pca.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+pca.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
+pca.gobiol$Database <- "GO Biological Process"
+get.kappa.cluster(pca.gobiol, intensities.dists$Symbol, file_path_sans_ext(pca.gobiol.file))
+pca.gobiol.final <- slice(pca.gobiol, c(1, 22, 73, 82, 35))
 
-yellow.gobiol.file <- "./enrichr/yellow/yellow_GO_Biological_Process_2015.xlsx"
-yellow.gobiol <- read.xlsx(yellow.gobiol.file) 
-yellow.gobiol$Num.Genes <- map(yellow.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-yellow.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
-yellow.gobiol$Database <- "GO Biological Process"
-get.kappa.cluster(yellow.gobiol, yellow.only$Symbol, file_path_sans_ext(yellow.gobiol.file))
+pca.gomole.file <- "./enrichr/pca.mean/GO_Molecular_Function_2015.xlsx" 
+pca.gomole <- read.xlsx(pca.gomole.file)
+pca.gomole$Num.Genes <- map(pca.gomole$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+pca.gomole$Database <- "GO Molecular Function"
+pca.gomole.final <- slice(pca.gomole, c(1, 13))
 
-pca.biol <- read.xlsx("./enrichr/pca.mean/GO_Biological_Process_2015.xlsx") %>% slice(c(30,35,166))
-pca.biol$Database <- "GO Biological Process"
-pca.molec <- read.xlsx("./enrichr/pca.mean/GO_Molecular_Function_2015.xlsx") %>% slice(1)
-pca.molec$Database <- "GO Molecular Function"
-pca.reactome <- read.xlsx("./enrichr/pca.mean/Reactome_2016.xlsx") %>% slice(c(28, 51))
+pca.reactome.file <- "./enrichr/pca.mean/Reactome_2016.xlsx" 
+pca.reactome <- read.xlsx(pca.reactome.file)
+pca.reactome$Num.Genes <- map(pca.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+pca.reactome %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
 pca.reactome$Database <- "Reactome"
-pca.enrichr <- rbind(pca.biol, pca.molec, pca.reactome)
+get.kappa.cluster(pca.reactome, intensities.dists$Symbol, file_path_sans_ext(pca.reactome.file))
+pca.reactome.final <- slice(pca.reactome, c(24, 48))
 
+pca.kegg.file <- "./enrichr/pca.mean/KEGG_2016.xlsx" 
+pca.kegg <- read.xlsx(pca.kegg.file)
+pca.kegg$Num.Genes <- map(pca.kegg$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+pca.kegg %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
+pca.kegg$Database <- "KEGG"
+pca.kegg.final <- slice(pca.kegg, 19)
+
+pca.enrichr <- rbind(pca.gobiol.final, pca.gomole.final, pca.reactome.final)
 gen.enrichrplot(pca.enrichr, "pca.enrichr")
 
-pco.biol <- read.xlsx("./enrichr/pco.mean/GO_Biological_Process_2015.xlsx") %>% slice(c(27,31))
-pco.biol$Database <- "GO Biological Process"
-pco.molec <- read.xlsx("./enrichr/pco.mean/GO_Molecular_Function_2015.xlsx") %>% slice(c(1,8))
-pco.molec$Database <- "GO Molecular Function"
-pco.reactome <- read.xlsx("./enrichr/pco.mean/Reactome_2016.xlsx") %>% slice(24)
-pco.reactome$Database <- "Reactome"
-pco.kegg <- read.xlsx("./enrichr/pco.mean/KEGG_2016.xlsx") %>% slice(c(9,15))
-pco.kegg$Database <- "KEGG"
-pco.enrichr <- rbind(pco.biol, pco.molec, pco.reactome, pco.kegg)
+pco.gobiol.file <- "./enrichr/pco.mean/GO_Biological_Process_2015.xlsx" 
+pco.gobiol <- read.xlsx(pco.gobiol.file)
+pco.gobiol$Database <- "GO Biological Process"
+pco.gobiol$Num.Genes <- map(pco.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+pco.gobiol.filter <- filter(pco.gobiol, Num.Genes > 4) %>% filter(P.value < 0.001)
+get.kappa.cluster(pco.gobiol.filter, intensities.dists$Symbol, file_path_sans_ext(pco.gobiol.file))
+pco.gobiol.final <- slice(pco.gobiol.filter, c(4, 21, 92))
+pco.gobiol.final %<>% rbind(pco.gobiol[119,])
 
+pco.gomolec.file <- "./enrichr/pco.mean/GO_Molecular_Function_2015.xlsx" 
+pco.gomolec <- read.xlsx(pco.gomolec.file)
+pco.gomolec$Database <- "GO Molecular Function"
+pco.gomolec$Num.Genes <- map(pco.gomolec$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+pco.gomolec.final <- slice(pco.molec, 11)
+
+pco.reactome.file <- "./enrichr/pco.mean/Reactome_2016.xlsx" 
+pco.reactome <- read.xlsx(pco.reactome.file)
+pco.reactome$Database <- "Reactome"
+pco.reactome$Num.Genes <- map(pco.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+pco.reactome.filter <- filter(pco.reactome, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(pco.reactome.filter, intensities.dists$Symbol, file_path_sans_ext(pco.reactome.file))
+pco.reactome.final <- slice(pco.reactome.filter, c(1, 17, 47))
+
+pco.kegg <- read.xlsx("./enrichr/pco.mean/KEGG_2016.xlsx") %>% slice(9)
+pco.kegg$Num.Genes <- map(pco.kegg$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+pco.kegg$Database <- "KEGG"
+
+pco.enrichr <- rbind(pco.gobiol.final, pco.gomolec.final, pco.reactome.final, pco.kegg)
 gen.enrichrplot(pco.enrichr, "pco.enrichr")
 
-cc.biol <- read.xlsx("./enrichr/cc.mean/GO_Biological_Process.xlsx") %>% slice(c(12,15))
-cc.biol$Database <- "GO Biological Process"
-cc.reactome <- read.xlsx("./enrichr/cc.mean/Reactome_2015.xlsx") %>% slice(c(1,45))
+cc.gobiol.file <- "./enrichr/cc.mean/GO_Biological_Process_2015.xlsx" 
+cc.gobiol <- read.xlsx(cc.gobiol.file)
+cc.gobiol$Database <- "GO Biological Process"
+cc.gobiol$Num.Genes <- map(cc.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+cc.gobiol.filter <- filter(cc.gobiol, Num.Genes > 4) %>% filter(P.value < 0.005)
+get.kappa.cluster(cc.gobiol.filter, intensities.dists$Symbol, file_path_sans_ext(cc.gobiol.file))
+cc.gobiol.final <- slice(cc.gobiol, c(60, 29, 116, 20, 35))
+
+cc.gomolec.file <- "./enrichr/cc.mean/GO_Molecular_Function_2015.xlsx" 
+cc.gomolec <- read.xlsx(cc.gomolec.file)
+cc.gomolec$Database <- "GO Molecular Function"
+cc.gomolec$Num.Genes <- map(cc.gomolec$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+cc.gomolec.final <- slice(cc.gomolec, 10)
+
+cc.reactome.file <- "./enrichr/cc.mean/Reactome_2016.xlsx" 
+cc.reactome <- read.xlsx(cc.reactome.file)
 cc.reactome$Database <- "Reactome"
-cc.kegg <- read.xlsx("./enrichr/cc.mean/KEGG_2015.xlsx") %>% slice(2)
+cc.reactome$Num.Genes <- map(cc.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+cc.reactome.filter <- filter(cc.reactome, Num.Genes > 4) %>% filter(P.value < 0.05)
+get.kappa.cluster(cc.reactome.filter, intensities.dists$Symbol, file_path_sans_ext(cc.reactome.file))
+cc.reactome.final <- slice(cc.reactome.filter, 1)
+
+cc.kegg <- read.xlsx("./enrichr/cc.mean/KEGG_2016.xlsx") %>% slice(26)
 cc.kegg$Database <- "KEGG"
-cc.enrichr <- rbind(cc.biol, cc.reactome, cc.kegg)
+cc.kegg$Num.Genes <- map(cc.kegg$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+
+cc.enrichr <- rbind(cc.gobiol.final, cc.gomolec.final, cc.reactome.final)
+gen.enrichrplot(cc.enrichr, "cc.enrichr")

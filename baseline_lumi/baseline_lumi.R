@@ -660,7 +660,7 @@ gen.connectivityplot("baseline_connectivity", lumi.expr.annot, "")
 remove.sample <- !grepl("CHOP_122_1_Pat|CHOP_14_1_Pat|CHOP_540_1_Car|CHOP_124_1_Pat|CHOP_96_1_Car", sampleNames(lumi.baseline))
 lumi.rmout <- lumi.baseline[,remove.sample]# %>% lumiN(method = "rsn")
 
-#####NOTE: In talking with the Geschwind lab about this, they seem to think that renormalizing after remove such a small number of samples is unnecessary.  I have not rigorously examined this, but I think it is worth pointing out that this may be redundant
+#####note: In talking with the Geschwind lab about this, they seem to think that renormalizing after remove such a small number of samples is unnecessary.  I have not rigorously examined this, but I think it is worth pointing out that this may be redundant
 lumi.rmout.norm <- lumiN(lumi.rmout, method = "rsn") #Normalize with robust spline regression
 lumi.rmout.qual <- lumiQ(lumi.rmout.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
 lumi.rmout.cutoff <- detectionCall(lumi.rmout.qual) #Get the count of probes which passed the detection threshold per sample
@@ -701,7 +701,7 @@ lumi.rmout.all <- lumi.rmout.annot[,!connectivity.sample]
 rmout.connectivity <- gen.connectivityplot("rmout_all_connectivity", lumi.rmout.all, "")
 
 #Remove replicates
-#####NOTE: this is only necessary in the very unusual situation in which you have technical replicates (i.e. the same RNA was run on two microarrays)
+#####note: this is only necessary in the very unusual situation in which you have technical replicates (i.e. the same RNA was run on two microarrays)
 ##### Other wise you can just skip to the next section
 reps <- sd.raw.norm.rm1[str_detect(names(sd.raw.norm.rm1), "1r")] %>% abs
 orig.key <- str_replace_all(names(reps), "1r", "1")
@@ -743,7 +743,7 @@ gen.pca("rmreps_mds_diagnosis", cm1.rmreps, phenoData(lumi.rmreps.annot), diagno
 gen.pca("rmreps_mds_batch", cm1.rmreps, phenoData(lumi.rmreps.annot), batch.colors, "Batch")
 
 #Use ComBat for batch effect correction
-#### NOTE: before running this adjustment, please check that the following things are true:
+#### note: before running this adjustment, please check that the following things are true:
 # 1) Other covariates are not correlated
 # 2) Batch number is not confounded with another categorical variable (i.e. diagnosis, treatment, sex, etc)
 # 3) Each batch has more than one array in it
@@ -777,7 +777,7 @@ gen.pca("combat_mds_diagnosis", cm1.combat, phenoData(lumi.combat), diagnosis.co
 gen.pca("combat_mds_batch", cm1.combat, phenoData(lumi.combat), batch.colors, "Batch")
 
 #Run PEER analysis and correlate to known covariates
-#### NOTE: This may be replaced by HCP in the near future
+#### note: This may be replaced by HCP in the near future
 
 source("../../code/hidden_covariate_linear.R")
 
@@ -946,6 +946,10 @@ fitb <- eBayes(fit2.anova)
 top.object.cc <- topTable(fitb, coef = 1, n = Inf)
 top.object.pco <- topTable(fitb, coef = 2, n = Inf) 
 top.object.pca <- topTable(fitb, coef = 3, n = Inf) 
+
+saveRDS.gz(top.object.pco, "./save/top.object.pco.rda")
+saveRDS.gz(top.object.pca, "./save/top.object.pca.rda")
+saveRDS.gz(top.object.cc, "./save/top.object.cc.rda")
 
 #Calculate ratios for use in tables
 ratio.exp <- gen.ratios(exprs(rmcov.collapse), pdata)
