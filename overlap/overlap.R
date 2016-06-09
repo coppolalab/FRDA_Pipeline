@@ -99,6 +99,16 @@ get.rrho <- function(colname1, colname2, dataset1, dataset2, symbolname, stepsiz
     return(rrho.out)
 }
 
+dtw.rrho <- function(colname1, colname2, dataset1, dataset2, symbolname, stepsize = 50)
+{
+    print(colname1)
+    print(colname2)
+    subset1 <- select_(dataset1, symbolname, colname1)
+    subset2 <- select_(dataset2, symbolname, colname2)
+    rrho.out <- RRHO(subset1, subset2, alternative = "enrichment", stepsize = stepsize, BY = TRUE)
+    return(rrho.out)
+}
+
 mouse.homology <- read_tsv("./HOM_MouseHumanSequence.rpt.txt") %>% data.frame %>% select(HomoloGene.ID, NCBI.Taxon.ID, Symbol)
 mouse.only <- filter(mouse.homology, NCBI.Taxon.ID == 10090)
 human.only <- filter(mouse.homology, NCBI.Taxon.ID == 9606)
@@ -431,6 +441,34 @@ rownames(pval.adjust.rrho) <- rownames(pval.rrho.all)
 
 CairoPDF("overlap.heatmap", width = 20, height = 6)
 par(mar = c(10, 8, 3, 3))
-labeledHeatmap(Matrix = -log10(pval.adjust.rrho), xLabels = colnames(pval.adjust.rrho), yLabels = rownames(pval.adjust.rrho), ySymbols = y.names, textMatrix = signif(pval.adjust.rrho, 3), setStdMargins = F, cex.text = 1.3, cex.lab = 1.3, zlim = c(0,12.5))
+labeledHeatmap(Matrix = -log10(pval.adjust.rrho), xLabels = colnames(pval.adjust.rrho), invertColors = TRUE, yLabels = rownames(pval.adjust.rrho), ySymbols = y.names, textMatrix = signif(pval.adjust.rrho, 3), setStdMargins = F, cex.text = 1.3, cex.lab = 1.3, zlim = c(0,12.5))
 dev.off()
 
+#DTW
+dtwh <- readRDS.gz("../dtw/save/dtw.pca.rda")
+dtwh.filtered <- filter(dtwh, Symbol %in% human.only$Symbol)
+dtwh.homology <- join(dtwh.filtered, human.only)
+
+dtwm <- readRDS.gz("../../Vijay_mouse/dtw/save/dtw.doxnd.rda")
+dtwm.filtered <- filter(dtwm, Symbol %in% mouse.only$Symbol)
+dtwm.homology <- join(dtwm.filtered, mouse.only)
+
+dtw.overlap <- intersect(dtwh.homology$HomoloGene.ID, dtwm.homology$HomoloGene.ID)
+dtwh.vijay <- filter(dtwh.homology, HomoloGene.ID %in% dtw.overlap) %>% filter(!duplicated(HomoloGene.ID))
+dtwm.human <- filter(dtwm.homology, HomoloGene.ID %in% dtw.overlap) %>% filter(!duplicated(HomoloGene.ID))
+
+dtwh.groups <- colnames(dtwh.vijay)[2:4]
+dtwm.groups <- colnames(dtwm.human)[1:3]
+
+dtw.rrho <- map(dtwm.groups, mkchain( map(dtwh.groups, dtw.rrho, ., dtwh.vijay, dtwm.human, "HomoloGene.ID"))) %>% flatten
+dtw.rrho.logpval <- map(dtw.rrho, getElement, "hypermat.by") %>% map_dbl(max) 
+dtw.rrho.pval <- exp(-dtw.rrho.logpval)
+dim(dtw.rrho.pval) <- c(3,3)
+rownames(dtw.rrho.pval) <- dtwh.groups
+colnames(dtw.rrho.pval) <- dtwm.groups
+
+#test.subset <- select(dtwh.vijay, HomoloGene.ID, Patient.vs.Control)
+#test.subset <- select(dtwm.human, HomoloGene.ID, Tg.DOX.vs.Tg.ND)
+#test.subset2 <- select(dtwm.human, HomoloGene.ID, Tg.ND.vs.WT.DOX)
+
+#rrho.test <- RRHO(test.subset, test.subset2, alternative = "enrichment", stepsize = 50, BY = TRUE)

@@ -19,7 +19,6 @@ library(irr)
 
 #For batch correction and PEER
 library(sva)
-library(peer)
 
 #Data arrangement
 library(reshape2)
@@ -94,6 +93,20 @@ gen.heatmap <- function(filename, lumi.object, maintitle)
     intensities1.cor <- corFast(exprs(lumi.object))
     CairoPDF(filename, width = 10, height = 10)
     heatmap.plus(intensities1.cor, col = heat.colors(40), ColSideColors = cbind(lumi.object$Batch.Color, lumi.object$Diagnosis.Color), scale = "none", cexCol = 0.17, cexRow = 0.17, main = maintitle)
+    dev.off()
+}
+
+gen.histogram <- function(filename, lumi.object)
+{
+    expr.df <- exprs(lumi.object) %>% t %>% data.frame
+    dataset.addvars <- mutate(expr.df, Sample.Status = sampleNames(lumi.object), Group = lumi.object$Group)
+    dataset.m <- melt(dataset.addvars, id = c("Sample.Status", "Group"))
+
+    p <- ggplot(dataset.m, aes(value, group = Sample.Status, col = factor(Group))) + geom_density() + theme_bw()
+    p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    p <- p + ggtitle("Histogram of VST Expression") + ylab("Density") + xlab("VST Expression") 
+    CairoPDF(filename, height = 5, width = 9)
+    print(p)
     dev.off()
 }
 
@@ -966,7 +979,7 @@ decide.final <- gen.decide(c("none", 0.001), fitb, TRUE) %>% melt(id.vars = c("T
 gen.decideplot("./selected_threshold", decide.final) #Plot cutoff
 
 decide.final.fdr <- gen.decide(c("fdr", 0.05), fitb, TRUE) %>% melt(id.vars = c("Test", "Num", "Direction")) #Compute significance cutoff p < 0.1, FDR adjusted
-gen.decideplot("./selected_threshold_fdr", decide.final.fdr, 3, 4) #plot cutoff
+gen.decideplot("./selected_threshold_fdr", decide.final.fdr, 6, 4) #plot cutoff
 
 #Make tables
 de.object <- read_tsv("./fit_none.tsv") #Read in unadjusted fit object

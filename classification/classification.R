@@ -12,11 +12,11 @@ library(readr)
 library(openxlsx)
 
 #Classification
-library(MASS)
+#library(MASS)
 library(randomForest)
-library(rpart)
-library(supclust)
-library(class)
+#library(rpart)
+#library(supclust)
+#library(class)
 library(e1071)
 library(pamr)
 library(glmnet)
@@ -25,6 +25,7 @@ library(randomGLM)
 library(rknn)
 library(crossval)
 library(WGCNA)
+library(fuzzyforest)
 
 #Data arrangement
 library(reshape2)
@@ -105,7 +106,7 @@ write.xlsx(rf.cc.genes, "rf.cc.genes.xlsx")
 
 rfcv.pca <- readRDS.gz("./save/rfcv.Patient.Carrier_smallmtry.rda")
 
-rfcv.pco <- rfcv(t(exprs(lumi.pco)), droplevels(lumi.pco$Status), step = 0.8, cv.fold = 3, ntree = 1000, mtry = function(p) nrow(lumi.pco))
+#rfcv.pco <- rfcv(t(exprs(lumi.pco)), droplevels(lumi.pco$Status), step = 0.8, cv.fold = 3, ntree = 1000, mtry = function(p) nrow(lumi.pco))
 #saveRDS.gz(rfcv.pco, "./save/rfcv.pco.rda")
 rfcv.pco <- readRDS.gz("./save/rfcv.Patient.Control_smallmtry.rda")
 
@@ -128,9 +129,17 @@ saveRDS.gz(rf.bigmtry.cc, "./save/rf.bigmtry.cc.rda")
 rf.bigmtry.cc.genes <- data.frame("nuID" = rownames(rf.bigmtry.cc$importance), "Importance" = as.vector(rf.bigmtry.cc$importance)) %>% join(fdata) %>% arrange(desc(Importance))
 write.xlsx(rf.bigmtry.cc.genes, "rf.bigmtry.cc.genes.xlsx")
 
-rfcv.bigmtry.pca <- readRDS.gz("./save/rfcv.Patient.Carrier.rda")
-rfcv.bigmtry.pco <- readRDS.gz("./save/rfcv.Patient.Control.rda")
-rfcv.bigmtry.cc <- readRDS.gz("./save/rfcv.Carrier.Control.rda")
+#rfcv.bigmtry.pca <- readRDS.gz("./save/rfcv.Patient.Carrier.rda")
+#rfcv.bigmtry.pco <- readRDS.gz("./save/rfcv.Patient.Control.rda")
+#rfcv.bigmtry.cc <- readRDS.gz("./save/rfcv.Carrier.Control.rda")
+
+#Fuzzy Random Forest
+
+module.out <- read.xlsx("../WGCNA/modules_out.xlsx")
+screencontrol.ff <- screen_control(drop_fraction = 0.2)
+selectcontrol.ff <- select_control(drop_fraction = 0.2)
+
+ff.pca <- ff(data.frame(t(exprs(lumi.pca))), droplevels(lumi.pca$Status), module_membership = module.out$Module, screen_params = screencontrol.ff, select_params = selectcontrol.ff, num_processors = 7, nodesize = 1)
 
 #Linear Discriminant Analysis
 lda.predfunction <- function(train.x, train.y, test.x, test.y, negative)
@@ -259,7 +268,7 @@ list.nums.init <- vector()
 recursive.multiply <- function(list.nums, current.value)
 {
    new.val = round(0.8 * current.value)
-   if (new.val > 2)
+   if (new.val > 9)
    {
        list.nums <- c(list.nums, new.val)
        recursive.multiply(list.nums, new.val)
@@ -285,66 +294,104 @@ extract.svmlist <- function(featsweep.object)
 }
 source("../../code/msvmRFE.R")
 
-svm.pca <- svm(x = t(exprs(lumi.pca)), y = droplevels(lumi.pca$Status), type = "C-classification", kernel = "linear", cross = 3, cost = 1, cachesize = 16000)
-saveRDS.gz(svm.pca, "./save/svm.pca.rda")
-#svm.pca <- svmRFE(svm.pca.input, k = 10, halve.above = 100)
+#SVM
+svm.fitcontrol <- trainControl(method = "cv", verboseIter = TRUE, number = 3)
+svm.pca.radial <- train(x = t(exprs(lumi.pca)), y = droplevels(factor(lumi.pca$Status)), method = "lssvmRadial", trControl = svm.fitcontrol)
+svm.pca.poly <- train(x = t(exprs(lumi.pca)), y = droplevels(factor(lumi.pca$Status)), method = "svmPoly", trControl = svm.fitcontrol)
 
-nfold <- 3
-svm.pca.input <- cbind(as.integer(droplevels(lumi.pca$Status)), t(exprs(lumi.pca)))
-nrows.pca <- nrow(svm.pca.input)
-folds.pca.index <- rep(1:nfold, len=nrows.pca)[sample(nrows.pca)]
-folds.pca.rows <- lapply(1:nfold, function(x) which(folds.pca.index == x))
-svm.pca.results <- lapply(folds.pca.rows, svmRFE.wrap, svm.pca.input, k=3, halve.above=3)
-saveRDS.gz(svm.pca.results, "svm.pca.results.rda")
-svm.pca.features <- WriteFeatures(svm.pca.results, svm.pca.input, save=F)
-colnames(svm.pca.features) <- "Symbol"
-#svm.pca.genes <- join(svm.pca.features, fdata)
-write.xlsx(svm.pca.features, "svm.pca.features.xlsx")
+svm.pco.radial <- train(x = t(exprs(lumi.pco)), y = droplevels(factor(lumi.pco$Status)), method = "lssvmRadial", trControl = svm.fitcontrol)
+svm.pco.poly <- train(x = t(exprs(lumi.pco)), y = droplevels(factor(lumi.pco$Status)), method = "svmPoly", trControl = svm.fitcontrol)
 
-svm.pco <- svm(x = t(exprs(lumi.pco)), y = droplevels(lumi.pco$Status), type = "C-classification", kernel = "linear", cross = 3, cost = 1, cachesize = 16000)
-#saveRDS.gz(svm.pco, "./save/svm.pco.rda")
+svm.cc.radial <- train(x = t(exprs(lumi.cc)), y = droplevels(factor(lumi.cc$Status)), method = "lssvmRadial", trControl = svm.fitcontrol)
+svm.cc.poly <- train(x = t(exprs(lumi.cc)), y = droplevels(factor(lumi.cc$Status)), method = "svmPoly", trControl = svm.fitcontrol)
 
-svm.pco.input <- cbind(as.integer(droplevels(lumi.pco$Status)), t(exprs(lumi.pco)))
-nrows.pco <- nrow(svm.pco.input)
-folds.pco.index <- rep(1:nfold, len=nrows.pco)[sample(nrows.pco)]
-folds.pco.rows <- lapply(1:nfold, function(x) which(folds.pco.index == x))
-svm.pco.results <- lapply(folds.pco.rows, svmRFE.wrap, svm.pco.input, k=3, halve.above=3)
-svm.pco.features <- WriteFeatures(svm.pco.results, svm.pco.input, save=F)
-colnames(svm.pco.features) <- "Symbol"
-#svm.pco.genes <- join(svm.pco.features, fdata)
-write.xlsx(svm.pco.features, "svm.pco.features.xlsx")
+rf.fitcontrol <- trainControl(method = "cv", verboseIter = TRUE, number = 3)
+rf.pca <- train(x = t(exprs(lumi.pca)), y = droplevels(factor(lumi.pca$Status)), method = "ranger", num.trees = 1000, tuneGrid = data.frame(mtry = floor(sqrt(nrow(lumi.pca)))), trControl = rf.fitcontrol)
+rf.pco <- train(x = t(exprs(lumi.pco)), y = droplevels(factor(lumi.pco$Status)), method = "ranger", num.trees = 1000, tuneGrid = data.frame(mtry = floor(sqrt(nrow(lumi.pco)))), trControl = rf.fitcontrol)
+rf.cc <- train(x = t(exprs(lumi.cc)), y = droplevels(factor(lumi.cc$Status)), method = "ranger", num.trees = 1000, tuneGrid = data.frame(mtry = floor(sqrt(nrow(lumi.cc)))), trControl = rf.fitcontrol)
 
-#svm.cc <- svm(x = t(expr.cc), y = droplevels(lumi.cc$Status), type = "C-classification", kernel = "linear", cross = 5, cost = 1, cachesize = 16000)
-#saveRDS.gz(svm.cc, "./save/svm.cc.rda")
+#Needs permutation testing so it's slow
+boruta.pca <- train(x = t(exprs(lumi.pca)), y = droplevels(factor(lumi.pca$Status)), method = "Boruta", num.trees = 1000, tuneGrid = data.frame(mtry = floor(sqrt(nrow(lumi.pca)))), trControl = rf.fitcontrol)
+boruta.pco <- train(x = t(exprs(lumi.pco)), y = droplevels(factor(lumi.pco$Status)), method = "Boruta", num.trees = 1000, tuneGrid = data.frame(mtry = floor(sqrt(nrow(lumi.pco)))), trControl = rf.fitcontrol)
+boruta.cc <- train(x = t(exprs(lumi.cc)), y = droplevels(factor(lumi.cc$Status)), method = "Boruta", num.trees = 1000, tuneGrid = data.frame(mtry = floor(sqrt(nrow(lumi.cc)))), trControl = rf.fitcontrol)
 
-svm.cc.input <- cbind(as.integer(droplevels(lumi.cc$Status)), t(exprs(lumi.cc)))
-nrows.cc <- nrow(svm.cc.input)
-folds.cc.index <- rep(1:nfold, len=nrows.cc)[sample(nrows.cc)]
-folds.cc.rows <- lapply(1:nfold, function(x) which(folds.cc.index == x))
-svm.cc.results <- lapply(folds.cc.rows, svmRFE.wrap, svm.cc.input, k=3, halve.above=3)
-svm.cc.features <- WriteFeatures(svm.cc.results, svm.cc.input, save=F)
-colnames(svm.cc.features) <- "Symbol"
-#svm.cc.genes <- join(svm.cc.features, fdata)
-write.xlsx(svm.cc.features, "svm.cc.features.xlsx")
+#Random Fern - why is performance so bad?
+rfern.pca <- train(x = data.frame(t(exprs(lumi.pca))), y = droplevels(factor(lumi.pca$Status)), method = "rFerns", trControl = rf.fitcontrol)
+rfern.pco <- train(x = data.frame(t(exprs(lumi.pco))), y = droplevels(factor(lumi.pco$Status)), method = "rFerns", trControl = rf.fitcontrol)
+rfern.cc <- train(x = data.frame(t(exprs(lumi.cc))), y = droplevels(factor(lumi.cc$Status)), method = "rFerns", trControl = rf.fitcontrol)
 
-featsweep.pca <- lapply(list.nums, FeatSweep.wrap, svm.pca.results, svm.pca.input)
-svm.pca.accuracies <- map_dbl(featsweep.pca, extract.svmlist)
-svm.pca.accuracies.df <- data.frame(Num.Genes = list.nums, Accuracy = (1 - svm.pca.accuracies)) 
-svm.pca.accuracies.df$comparison <- "Patient vs Carrier"
-saveRDS.gz(featsweep.pca, "./save/featsweep.pca.rda")
-saveRDS.gz(svm.pca.accuracies.df, "./save/svm.pca.accuracies.df.rda")
+#RRF - uses randomForest
+#inTrees - uses randomForest
 
-featsweep.pco <- lapply(list.nums, FeatSweep.wrap, svm.pco.results, svm.pco.input)
-svm.pco.accuracies <- map_dbl(featsweep.pco, extract.svmlist)
-svm.pco.accuracies.df <- data.frame(Num.Genes = list.nums, Accuracy = (1 - svm.pco.accuracies))
-svm.pco.accuracies.df$comparison <- "Patient vs Control"
-saveRDS.gz(featsweep.pco, "./save/featsweep.pco.rda")
+#extraTrees FUCK JAVA
+extraTree.pca <- train(x = t(exprs(lumi.pca)), y = droplevels(factor(lumi.pca$Status)), method = "extraTrees", ntree = 1000, numThreads = 8, tuneGrid = expand.grid(mtry = floor(sqrt(nrow(lumi.pca))), numRandomCuts = 1:2), trControl = rf.fitcontrol)
+extraTree.pco <- train(x = t(exprs(lumi.pco)), y = droplevels(factor(lumi.pco$Status)), method = "extraTrees", ntree = 1000, numThreads = 8, tuneGrid = expand.grid(mtry = floor(sqrt(nrow(lumi.pco))), numRandomCuts = 1:2), trControl = rf.fitcontrol)
+extraTree.cc <- train(x = t(exprs(lumi.cc)), y = droplevels(factor(lumi.cc$Status)), method = "extraTrees", ntree = 1000, numThreads = 8, tuneGrid = expand.grid(mtry = floor(sqrt(nrow(lumi.cc))), numRandomCuts = 1:2), trControl = rf.fitcontrol)
 
-featsweep.cc <- lapply(list.nums, FeatSweep.wrap, svm.cc.results, svm.cc.input)
-svm.cc.accuracies <- map_dbl(featsweep.cc, extract.svmlist)
-svm.cc.accuracies.df <- data.frame(Num.Genes = list.nums, Accuracy = (1 - svm.cc.accuracies))
-svm.cc.accuracies.df$comparison <- "Carrier vs Control"
-saveRDS.gz(featsweep.cc, "./save/featsweep.cc.rda")
+stop
+
+
+#svm.pca <- svm(x = t(exprs(lumi.pca)), y = droplevels(lumi.pca$Status), type = "C-classification", kernel = "linear", cross = 3, cost = 1, cachesize = 16000)
+#saveRDS.gz(svm.pca, "./save/svm.pca.rda")
+##svm.pca <- svmRFE(svm.pca.input, k = 10, halve.above = 100)
+
+#nfold <- 3
+#svm.pca.input <- cbind(as.integer(droplevels(lumi.pca$Status)), t(exprs(lumi.pca)))
+#nrows.pca <- nrow(svm.pca.input)
+#folds.pca.index <- rep(1:nfold, len=nrows.pca)[sample(nrows.pca)]
+#folds.pca.rows <- lapply(1:nfold, function(x) which(folds.pca.index == x))
+#svm.pca.results <- lapply(folds.pca.rows, svmRFE.wrap, svm.pca.input, k=3, halve.above=10)
+#saveRDS.gz(svm.pca.results, "svm.pca.results.rda")
+#svm.pca.features <- WriteFeatures(svm.pca.results, svm.pca.input, save=F)
+#colnames(svm.pca.features) <- "Symbol"
+##svm.pca.genes <- join(svm.pca.features, fdata)
+#write.xlsx(svm.pca.features, "svm.pca.features.xlsx")
+#svm.pca.rfe <- svmRFE(svm.pca.input, k = 3, halve.above = 10)
+
+#svm.pco <- svm(x = t(exprs(lumi.pco)), y = droplevels(lumi.pco$Status), type = "C-classification", kernel = "linear", cross = 3, cost = 1, cachesize = 16000)
+##saveRDS.gz(svm.pco, "./save/svm.pco.rda")
+
+#svm.pco.input <- cbind(as.integer(droplevels(lumi.pco$Status)), t(exprs(lumi.pco)))
+#nrows.pco <- nrow(svm.pco.input)
+#folds.pco.index <- rep(1:nfold, len=nrows.pco)[sample(nrows.pco)]
+#folds.pco.rows <- lapply(1:nfold, function(x) which(folds.pco.index == x))
+#svm.pco.results <- lapply(folds.pco.rows, svmRFE.wrap, svm.pco.input, k=3, halve.above=10)
+#svm.pco.features <- WriteFeatures(svm.pco.results, svm.pco.input, save=F)
+#colnames(svm.pco.features) <- "Symbol"
+##svm.pco.genes <- join(svm.pco.features, fdata)
+#write.xlsx(svm.pco.features, "svm.pco.features.xlsx")
+
+##svm.cc <- svm(x = t(expr.cc), y = droplevels(lumi.cc$Status), type = "C-classification", kernel = "linear", cross = 5, cost = 1, cachesize = 16000)
+##saveRDS.gz(svm.cc, "./save/svm.cc.rda")
+
+#svm.cc.input <- cbind(as.integer(droplevels(lumi.cc$Status)), t(exprs(lumi.cc)))
+#nrows.cc <- nrow(svm.cc.input)
+#folds.cc.index <- rep(1:nfold, len=nrows.cc)[sample(nrows.cc)]
+#folds.cc.rows <- lapply(1:nfold, function(x) which(folds.cc.index == x))
+#svm.cc.results <- lapply(folds.cc.rows, svmRFE.wrap, svm.cc.input, k=3, halve.above=10)
+#svm.cc.features <- WriteFeatures(svm.cc.results, svm.cc.input, save=F)
+#colnames(svm.cc.features) <- "Symbol"
+##svm.cc.genes <- join(svm.cc.features, fdata)
+#write.xlsx(svm.cc.features, "svm.cc.features.xlsx")
+
+#featsweep.pca <- lapply(list.nums, FeatSweep.wrap, svm.pca.results, svm.pca.input)
+#svm.pca.accuracies <- map_dbl(featsweep.pca, extract.svmlist)
+#svm.pca.accuracies.df <- data.frame(Num.Genes = list.nums, Accuracy = (1 - svm.pca.accuracies)) 
+#svm.pca.accuracies.df$comparison <- "Patient vs Carrier"
+#saveRDS.gz(featsweep.pca, "./save/featsweep.pca.rda")
+#saveRDS.gz(svm.pca.accuracies.df, "./save/svm.pca.accuracies.df.rda")
+
+#featsweep.pco <- lapply(list.nums, FeatSweep.wrap, svm.pco.results, svm.pco.input)
+#svm.pco.accuracies <- map_dbl(featsweep.pco, extract.svmlist)
+#svm.pco.accuracies.df <- data.frame(Num.Genes = list.nums, Accuracy = (1 - svm.pco.accuracies))
+#svm.pco.accuracies.df$comparison <- "Patient vs Control"
+#saveRDS.gz(featsweep.pco, "./save/featsweep.pco.rda")
+
+#featsweep.cc <- lapply(list.nums, FeatSweep.wrap, svm.cc.results, svm.cc.input)
+#svm.cc.accuracies <- map_dbl(featsweep.cc, extract.svmlist)
+#svm.cc.accuracies.df <- data.frame(Num.Genes = list.nums, Accuracy = (1 - svm.cc.accuracies))
+#svm.cc.accuracies.df$comparison <- "Carrier vs Control"
+#saveRDS.gz(featsweep.cc, "./save/featsweep.cc.rda")
 
 svm.rfe.accuracies <- rbind(svm.pca.accuracies.df, svm.pco.accuracies.df, svm.cc.accuracies.df)
 svm.rfe.accuracies$Num.Genes <- factor(svm.rfe.accuracies$Num.Genes, unique(svm.rfe.accuracies$Num.Genes, decreasing = TRUE)) 

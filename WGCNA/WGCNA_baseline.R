@@ -193,7 +193,7 @@ dev.off()
 
 softPower <- 6
 adjacency.expr <- adjacency(expr.collapse, power = softPower, type = "signed", corFnc = "bicor", corOptions = "maxPOutliers = 0.05")
-saveRDS.gz(adjacency, file = "./save/adjacency.rda")
+saveRDS.gz(adjacency.expr, file = "./save/adjacency.rda")
 
 TOM <- TOMsimilarity(adjacency.expr, verbose = 5)
 dissimilarity.TOM <- 1 - TOM
@@ -346,21 +346,6 @@ enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "
 color.names <- unique(module.colors) %>% sort
 trap1 <- map(color.names[-6], enrichr.submit, modules.out, enrichr.terms, FALSE)
 
-#skipped
-split(modules.out, modules.out$module.color) %>% map(submit.stringdb)
-black.genes <- filter(modules.out, Module == "black")
-black.ppi <- submit.stringdb(black.genes, 400)
-
-edge.weights <- edge_attr(black.ppi, "combined_score")
-pruned.subnet <- delete.edges(black.ppi, which(edge.weights < 400))
-num.edges <- map(1:vcount(pruned.subnet), incident, graph = pruned.subnet) %>% map_dbl(length) 
-names(num.edges) <- V(pruned.subnet)$name
-pruned.subnet2 <- delete.vertices(pruned.subnet, which(num.edges == 0))
-vertex.colors <- rainbow(vcount(pruned.subnet2))
-V(pruned.subnet2)$color <- vertex.colors
-edge.df <- data.frame(edge_attr(symbols.subnet))
-edge.thickness <- edge.df$combined_score / 200
-
 submit.stringdb <- function(module.subset, threshold = 400)
 {
     get.stringdb(module.subset, unique(module.subset$Module), "./stringdb", edge.threshold = threshold)
@@ -480,3 +465,86 @@ pink.reactome$Num.Genes <- map(pink.reactome$Genes, str_split, ",") %>% map(getE
 pink.enrichr <- rbind(pink.gobiol.final, pink.reactome)
 
 gen.enrichrplot(pink.gobiol.final, "pink.enrichr")
+
+#PPI
+biogrid.ppi <- read_tsv("~/Downloads/BIOGRID-ORGANISM-3.4.136.tab2/BIOGRID-ORGANISM-Homo_sapiens-3.4.136.tab2.txt") %>% data.frame
+biogrid.ppi.reduce <- select(biogrid.ppi, contains("Official"))
+
+inweb.ppi <- read_tsv("../../Dementia Project/mapt/InWeb3_HC_NonRed.txt", col_names = FALSE)
+colnames(inweb.ppi) <- c("Interactor.A", "Interactor.B")
+iw.hugo <- read_tsv("../../Dementia Project/mapt/IWtoHugo.txt", col_names = FALSE)
+colnames(iw.hugo) <- c("IW.ID", "HUGO")
+
+green.gobiol.resp <- str_split(green.gobiol.final[2,]$Genes, ",")[[1]]
+pink.gobiol.toll <- str_split(pink.gobiol.final[4,]$Genes, ",")[[1]]
+pink.gobiol.apop <- str_split(pink.gobiol.final[2,]$Genes, ",")[[1]]
+
+ggr.ppi <- get.ppi(green.gobiol.resp)
+pgt.ppi <- get.ppi(pink.gobiol.toll)
+pga.ppi <- get.ppi(pink.gobiol.apop)
+
+get.ppi <- function(gene.list)
+{
+    ppi.id <- filter(iw.hugo, is.element(HUGO, gene.list))$IW.ID
+    ppi.inweb.interactors <- filter(inweb.ppi, is.element(Interactor.A, ppi.id)) %>% filter(is.element(Interactor.B, ppi.id))
+    ppi.inweb.symbols <- merge(ppi.inweb.interactors, iw.hugo, by.x = "Interactor.A", by.y = "IW.ID") %>% merge(iw.hugo, by.x = "Interactor.B", by.y = "IW.ID")
+    ppi.inweb.final <- select(ppi.inweb.symbols, contains("HUGO"))
+    colnames(ppi.inweb.final) <- c("Symbol.A", "Symbol.B")
+
+    ppi.biogrid <- filter(biogrid.ppi.reduce, Official.Symbol.Interactor.A %in% gene.list) %>% filter(Official.Symbol.Interactor.B %in% gene.list)
+    colnames(ppi.biogrid) <- c("Symbol.A", "Symbol.B")
+
+    ppi.combined <- rbind(ppi.inweb.final, ppi.biogrid)
+    ppi.combined$unique <- str_c(ppi.combined$Symbol.A, ppi.combined$Symbol.B, sep = ".")
+    ppi.unique <- filter(ppi.combined, !duplicated(unique)) %>% select(-unique)
+    ppi.self <- apply(ppi.unique, 1, reduce, identical)
+    ppi.unique.final <- filter(ppi.unique, !ppi.self)
+    return(ppi.unique.final)
+}
+
+plot.ppi(adjacency.expr, green.gobiol.resp, ggr.ppi, "green_igraph", TRUE)
+plot.ppi(adjacency.expr, pink.gobiol.apop, pga.ppi, "pga_igraph", TRUE)
+#plot.ppi(adjacency.expr, pink.gobiol.toll, pgt.unique.final, "pgt_igraph", FALSE)
+
+#PPI Plot
+plot.ppi <- function(adjacency.expr, gene.list, ppi.edges, filename, prune = FALSE)
+{
+    expr.adjacency <- adjacency.expr[gene.list,gene.list]
+    ppi.adjacency <- matrix(0, ncol = ncol(expr.adjacency), nrow = nrow(expr.adjacency), dimnames = list(rownames(expr.adjacency), colnames(expr.adjacency)))
+    ppi.adjacency[as.matrix(ppi.edges)] <- 1
+    final.adjacency <- expr.adjacency * ppi.adjacency
+    final.mins <- apply(final.adjacency, 2, min)
+    final.maxs <- apply(final.adjacency, 2, max)
+    final.scaled <- scale(final.adjacency, center = final.mins, scale = final.maxs - final.mins)
+    final.scaled[is.nan(final.scaled)] <- 0
+
+    final.igraph <- graph_from_adjacency_matrix(expr.adjacency, mode = "undirected", weighted = TRUE, diag = FALSE)
+    ppi.igraph <- graph_from_adjacency_matrix(final.scaled, mode = "undirected", weighted = TRUE, diag = FALSE)
+
+    if (prune == TRUE)
+    {
+        #num.edges <- map(1:vcount(ppi.igraph), incident, graph = ppi.igraph) %>% map_dbl(length)
+        final.igraph <- delete.vertices(final.igraph, which(clusters(ppi.igraph)$membership != 1))
+        ppi.igraph <- delete.vertices(ppi.igraph, which(clusters(ppi.igraph)$membership != 1))
+    }
+
+    #ppi.colors <- rainbow(length(unique(clusters(ppi.igraph)$membership)))
+    #final.colors <- ppi.colors[clusters(ppi.igraph)$membership]
+
+    final.edges <- attr(E(final.igraph), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+    final.df <- data.frame(Edges = final.edges, Weight = edge_attr(final.igraph, "weight"))
+    ppi.edges <- attr(E(ppi.igraph), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+    ppi.df <- data.frame(Edges = ppi.edges, Weight = edge_attr(ppi.igraph, "weight"))
+
+    final.filter <- is.element(final.df$Edges, ppi.df$Edges)
+    final.df[final.filter,]$Weight <- ppi.df$Weight 
+    final.df[!final.filter,]$Weight <- 0
+    final.df$Color <- "#dddddd99"
+    final.df[final.filter,]$Color <- "#0000FF99"
+
+    CairoPDF(filename, width = 7, height = 7)
+    par(mar=c(0,0,0,0) + 0.5)
+    plot.igraph(final.igraph, layout = layout_nicely(final.igraph), vertex.size = 30, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = final.df$Color, edge.width = 5*final.df$Weight)
+    dev.off()
+}
+

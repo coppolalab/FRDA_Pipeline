@@ -660,3 +660,114 @@ get.kappa.cluster(greenyellow.reactome, greenyellow.only$Symbol, file_path_sans_
 
 greenyellow.final <- rbind(greenyellow.gobiol.final, greenyellow.molec.final)
 gen.enrichrplot(greenyellow.final, "greenyellow.enrichr")
+
+#PPI
+biogrid.ppi <- read_tsv("~/Downloads/BIOGRID-ORGANISM-3.4.136.tab2/BIOGRID-ORGANISM-Homo_sapiens-3.4.136.tab2.txt") %>% data.frame
+biogrid.ppi.reduce <- select(biogrid.ppi, contains("Official"))
+
+inweb.ppi <- read_tsv("../../Dementia Project/mapt/InWeb3_HC_NonRed.txt", col_names = FALSE)
+colnames(inweb.ppi) <- c("Interactor.A", "Interactor.B")
+iw.hugo <- read_tsv("../../Dementia Project/mapt/IWtoHugo.txt", col_names = FALSE)
+colnames(iw.hugo) <- c("IW.ID", "HUGO")
+
+yellow.kegg.als <- str_split(yellow.kegg$Genes, ",")[[1]]
+yellow.reactome.oxid <- str_split(yellow.reactome$Genes, ",")[[1]]
+yellow.gobiol.tetra <- str_split(yellow.gobiol.final[2,]$Genes, ",")[[1]]
+
+brown.gobiol.acet <- str_split(brown.gobiol.final[1,]$Genes, ",")[[1]]
+brown.reactome.tca <- str_split(brown.reactome.final$Genes, ",")[[1]]
+brown.gomole.iron <- str_split(brown.gomole.final[1,]$Genes, ",")[[1]]
+
+yka.ppi <- get.ppi(yellow.kegg.als) #Maybe don't prune
+yro.ppi <- get.ppi(yellow.reactome.oxid) 
+ygt.ppi <- get.ppi(yellow.gobiol.tetra) #Don't prune
+
+bga.ppi <- get.ppi(brown.gobiol.acet) #Don't prune
+brt.ppi <- get.ppi(brown.reactome.tca) #Hueg
+bgi.ppi <- get.ppi(brown.gomole.iron) #Don't prune?
+
+adjacency.expr <- readRDS.gz("./save/adjacency.expr.rda")
+
+get.ppi <- function(gene.list)
+{
+    ppi.id <- filter(iw.hugo, is.element(HUGO, gene.list))$IW.ID
+    ppi.inweb.interactors <- filter(inweb.ppi, is.element(Interactor.A, ppi.id)) %>% filter(is.element(Interactor.B, ppi.id))
+    ppi.inweb.symbols <- merge(ppi.inweb.interactors, iw.hugo, by.x = "Interactor.A", by.y = "IW.ID") %>% merge(iw.hugo, by.x = "Interactor.B", by.y = "IW.ID")
+    ppi.inweb.final <- select(ppi.inweb.symbols, contains("HUGO"))
+    colnames(ppi.inweb.final) <- c("Symbol.A", "Symbol.B")
+
+    ppi.biogrid <- filter(biogrid.ppi.reduce, Official.Symbol.Interactor.A %in% gene.list) %>% filter(Official.Symbol.Interactor.B %in% gene.list)
+    colnames(ppi.biogrid) <- c("Symbol.A", "Symbol.B")
+
+    ppi.combined <- rbind(ppi.inweb.final, ppi.biogrid)
+    ppi.combined$unique <- str_c(ppi.combined$Symbol.A, ppi.combined$Symbol.B, sep = ".")
+    ppi.unique <- filter(ppi.combined, !duplicated(unique)) %>% select(-unique)
+    ppi.self <- apply(ppi.unique, 1, reduce, identical)
+    ppi.unique.final <- filter(ppi.unique, !ppi.self)
+    return(ppi.unique.final)
+}
+
+plot.ppi(adjacency.expr, yellow.kegg.als, yka.ppi, "yka_igraph")
+yro.igraph <- plot.ppi(adjacency.expr, yellow.reactome.oxid, yro.ppi, "yro_igraph", prune = TRUE, clust.keep = 2)
+yro.incident <- map(1:vcount(yro.igraph), incident, graph = yro.igraph) %>% map_dbl(length)
+names(yro.incident) <- V(yro.igraph)$name
+plot.ppi(adjacency.expr, yellow.gobiol.tetra, ygt.ppi, "ygt_igraph")
+
+plot.ppi(adjacency.expr, brown.gobiol.acet, bga.ppi, "bga_igraph")
+brt.igraph <- plot.ppi(adjacency.expr, brown.reactome.tca, brt.ppi, "brt_igraph", TRUE)
+brt.incident <- map(1:vcount(brt.igraph), incident, graph = brt.igraph) %>% map_dbl(length)
+names(brt.incident) <- V(brt.igraph)$name
+plot.ppi(adjacency.expr, brown.gomole.iron, bgi.ppi, "bgi_igraph")
+
+#PPI Plot
+plot.ppi <- function(adjacency.expr, gene.list, ppi.edges, filename, prune = FALSE, clust.keep = 1, plot.width = 7, plot.height = 7)
+{
+    expr.adjacency <- adjacency.expr[gene.list,gene.list]
+    ppi.adjacency <- matrix(0, ncol = ncol(expr.adjacency), nrow = nrow(expr.adjacency), dimnames = list(rownames(expr.adjacency), colnames(expr.adjacency)))
+    ppi.adjacency[as.matrix(ppi.edges)] <- 1
+    final.adjacency <- expr.adjacency * ppi.adjacency
+    final.mins <- apply(final.adjacency, 2, min)
+    final.maxs <- apply(final.adjacency, 2, max)
+    final.scaled <- scale(final.adjacency, center = final.mins, scale = final.maxs - final.mins)
+    final.scaled[is.nan(final.scaled)] <- 0
+
+    final.igraph <- graph_from_adjacency_matrix(expr.adjacency, mode = "undirected", weighted = TRUE, diag = FALSE)
+    ppi.igraph <- graph_from_adjacency_matrix(final.scaled, mode = "undirected", weighted = TRUE, diag = FALSE)
+
+    if (prune == TRUE)
+    {
+        #num.edges <- map(1:vcount(ppi.igraph), incident, graph = ppi.igraph) %>% map_dbl(length)
+
+        final.igraph <- delete.vertices(final.igraph, which(clusters(ppi.igraph)$membership != clust.keep))
+        ppi.igraph <- delete.vertices(ppi.igraph, which(clusters(ppi.igraph)$membership != clust.keep))
+    }
+
+    #ppi.colors <- rainbow(length(unique(clusters(ppi.igraph)$membership)))
+    #final.colors <- ppi.colors[clusters(ppi.igraph)$membership]
+
+    final.edges <- attr(E(final.igraph), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+    final.df <- data.frame(Edges = final.edges, Weight = edge_attr(final.igraph, "weight"))
+    if (sum(final.scaled) > 0)
+    {
+        ppi.edges <- attr(E(ppi.igraph), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+        ppi.df <- data.frame(Edges = ppi.edges, Weight = edge_attr(ppi.igraph, "weight"))
+
+        final.filter <- is.element(final.df$Edges, ppi.df$Edges)
+        final.df[final.filter,]$Weight <- ppi.df$Weight 
+        final.df[!final.filter,]$Weight <- 0
+        final.df$Color <- "#dddddd99"
+        final.df[final.filter,]$Color <- "#0000FF99"
+    }
+    else
+    {
+        final.df <- list(Color = "#0000FF99", Weight = 0)
+    }
+
+    CairoPDF(filename, width = plot.width, height = plot.height)
+    par(mar=c(0,0,0,0) + 0.5)
+    plot.igraph(final.igraph, layout = layout_nicely(final.igraph), vertex.size = 35, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = final.df$Color, edge.width = 5*final.df$Weight)
+    dev.off()
+
+    return(ppi.igraph)
+}
+
