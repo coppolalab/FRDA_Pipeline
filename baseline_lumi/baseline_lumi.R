@@ -1,108 +1,59 @@
-#Some utils
-library(R.utils)
-library(tools)
-
-#For DE analysis
-library(Biobase)
-library(marray)
-library(limma)
-library(MASS)
-library(matrixStats)
+#For DE
+library(lumi)
 library(lumiHumanIDMapping)
 library(lumiHumanAll.db)
+library(limma)
 library(annotate)
-library(lumi)
-library(WGCNA) #for fastcor
 library(biomaRt)
-library(broom)
-library(irr)
-
-#For batch correction and PEER
+library(siggenes)
 library(sva)
-
-#Data arrangement
-library(reshape2)
-library(plyr)
-library(dplyr)
-library(parallel)
-
-#Functional programming
-library(magrittr)
-library(purrr)
-library(functional)
-library(vadr)
+library(broom)
+library(WGCNA)
+library(tools)
 
 #String operations
 library(stringr)
-
-#Plotting
-library(ggplot2)
-library(extrafont)
-library(Cairo)
-library(heatmap.plus)
-library(gplots) #for heatmap.2
-library(RColorBrewer)
 
 #Reading and writing tables
 library(readr)
 library(openxlsx)
 
-match.exact <- mkchain(map_chr(paste %<<<% "^" %<<% c("$", sep = "")), paste(collapse = "|"))
+#Plotting
+library(ggplot2)
+library(Cairo)
+library(heatmap.plus)
+library(gplots) #for heatmap.2
+library(RColorBrewer)
 
-saveRDS.gz <- function(object,file,threads=parallel::detectCores()) {
-  con <- pipe(paste0("pigz -p",threads," > ",file),"wb")
-  saveRDS(object, file = con)
-  close(con)
-}
+#Data arrangement
+library(dplyr)
+library(tidyr)
 
-readRDS.gz <- function(file,threads=parallel::detectCores()) {
-  con <- pipe(paste0("pigz -d -c -p",threads," ",file))
-  object <- readRDS(file = con)
-  close(con)
-  return(object)
-}
+#Functional programming
+library(magrittr)
+library(purrr)
+library(rlist)
 
-#Boxplot function
-gen.boxplot <- function(filename, lumi.object, colorscheme, maintext, ylabtext)
-{
-    #dataset %<>% t %>% data.frame
+#Boxplot function - must fix
+BoxPlot <- function(filename, lumi.object, colorscheme, maintext, ylabtext) {
     expr.df <- exprs(lumi.object) %>% t %>% data.frame
     dataset.addvars <- mutate(expr.df, Sample.Status = sampleNames(lumi.object), Batch = lumi.object$Batch)
-    dataset.m <- melt(dataset.addvars, id = c("Sample.Status", "Batch"))
+    dataset.m <- gather(dataset.addvars, id = c("Sample.Status", "Batch"))
     p <- ggplot(dataset.m, aes(x = Sample.Status, y = value, fill = factor(Batch))) + geom_boxplot() + theme_bw()
     p <- p + scale_fill_manual(values = colorscheme)
     p <- p + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1.0, size = 5))     
     p <- p + ggtitle(maintext) + ylab(ylabtext) + xlab("Sample") + theme(axis.text.x = element_text(size = 3))
     p <- p + theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-    ggsave(filename = filename, plot = p, family = "Oxygen", width = 20 , height = 8)
+    ggsave(filename = filename, plot = p, family = "Noto Sans", width = 20 , height = 8)
 }
 
-#Heatmap bar function
-gen.heatmapbars <- function(batch.colorscheme, diagnosis.colorscheme, targetset)
-{
-    batch.heatmap <- data.frame("Batch" = seq(1:length(batch.colorscheme)), "Batch.Color" = batch.colorscheme)
-    diagnosis.heatmap <- data.frame("Status" = levels(targetset$Status), "Diagnosis.Color" = diagnosis.colors)
-    colorscheme <- data.frame("Batch" = targetset$Batch, "Status" = targetset$Status) %>% join(batch.heatmap) %>% join(diagnosis.heatmap)
-    colorscheme <- as.matrix(subset(colorscheme, select = c("Batch.Color", "Diagnosis.Color")))
-    return(colorscheme)
-}
-
-#Heatmap function
-gen.heatmap <- function(filename, lumi.object, maintitle)
-{
-    intensities1.cor <- corFast(exprs(lumi.object))
-    CairoPDF(filename, width = 10, height = 10)
-    heatmap.plus(intensities1.cor, col = heat.colors(40), ColSideColors = cbind(lumi.object$Batch.Color, lumi.object$Diagnosis.Color), scale = "none", cexCol = 0.17, cexRow = 0.17, main = maintitle)
-    dev.off()
-}
-
-gen.histogram <- function(filename, lumi.object)
-{
+#Histogram
+Histogram <- function(filename, lumi.object) {
     expr.df <- exprs(lumi.object) %>% t %>% data.frame
-    dataset.addvars <- mutate(expr.df, Sample.Status = sampleNames(lumi.object), Group = lumi.object$Group)
-    dataset.m <- melt(dataset.addvars, id = c("Sample.Status", "Group"))
+    dataset.addvars <- mutate(expr.df, Sample.Name = sampleNames(lumi.object), Status = lumi.object$Status)
+    dataset.m <- gather(dataset.addvars, nuID, Expression, -Sample.Name, -Status)
 
-    p <- ggplot(dataset.m, aes(value, group = Sample.Status, col = factor(Group))) + geom_density() + theme_bw()
+    p <- ggplot(dataset.m, aes(Expression, group = Sample.Name, col = factor(Status))) + geom_density() + theme_bw()
     p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
     p <- p + ggtitle("Histogram of VST Expression") + ylab("Density") + xlab("VST Expression") 
     CairoPDF(filename, height = 5, width = 9)
@@ -110,46 +61,17 @@ gen.histogram <- function(filename, lumi.object)
     dev.off()
 }
 
-#IAC detection of outliers vix 
-gen.IACcluster <- function(filename, dataset, maintitle)
-{
-    IAC = corFast(dataset, use = "p")
-    cluster1 = flashClust::hclust(as.dist(1 - IAC))
-    CairoPDF(filename, width = 13, height = 10)
-    plot(cluster1, main = paste(maintitle, " (no = ", dim(IAC)[2], ")"))
-    dev.off()
-    return(IAC)
-}
-
-#Create plot of standard deviations of all interarray correlations.  
-gen.sdplot <- function(filename, dataset, maintitle)
-{
-    meanIAC <- apply(dataset, 2, mean)
-    sdCorr <- sd(meanIAC)
-    numbersd <- (meanIAC - mean(meanIAC)) / sdCorr
-
-    p <- ggplot(numbersd.plot, aes(x = Sample.Num, y = Z.score, label = Sample.Status) )
-    p <- p + geom_text(size = 4, colour = "red")
-    p <- p + geom_hline(aes(yintercept = -2)) + geom_hline(yintercept = -3) 
-    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-    p <- p + xlab("Sample Number") + ylab("Z score") + ggtitle(maintitle)
-    CairoPDF(filename, width = 10, height = 10)
-    print(p)
-    dev.off()
-    return(numbersd)
-}
-
-gen.connectivityplot <- function(filename, dataset, maintitle)
-{
+#Samplewise connectivity plot
+ConnectivityPlot <- function(filename, dataset, maintitle) {
     norm.adj <- (0.5 + 0.5 * bicor(exprs(dataset)))
-    colnames(norm.adj) <- dataset$Sample.Name
-    rownames(norm.adj) <- dataset$Sample.Name
+    colnames(norm.adj) <- dataset$Slide.ID
+    rownames(norm.adj) <- dataset$Slide.ID
     net.summary <- fundamentalNetworkConcepts(norm.adj)
     net.connectivity <- net.summary$Connectivity
     connectivity.zscore <- (net.connectivity - mean(net.connectivity)) / sqrt(var(net.connectivity))
 
-    connectivity.plot <- data.frame(Sample.Name = names(connectivity.zscore), Z.score = connectivity.zscore, Sample.Num = 1:length(connectivity.zscore))
-    p <- ggplot(connectivity.plot, aes(x = Sample.Num, y = Z.score, label = Sample.Name) )
+    connectivity.plot <- data.frame(Slide.ID = names(connectivity.zscore), Z.score = connectivity.zscore, Sample.Num = 1:length(connectivity.zscore))
+    p <- ggplot(connectivity.plot, aes(x = Sample.Num, y = Z.score, label = Slide.ID) )
     p <- p + geom_text(size = 4, colour = "red")
     p <- p + geom_hline(aes(yintercept = -2)) + geom_hline(yintercept = -3) 
     p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
@@ -157,406 +79,121 @@ gen.connectivityplot <- function(filename, dataset, maintitle)
     CairoPDF(filename, width = 10, height = 10)
     print(p)
     dev.off()
-    return(connectivity.zscore)
+    connectivity.zscore
 }
 
-#Median absolute deviation standardization function
-standardize <- function(dataset)
-{
-    rowmed <- apply(dataset, 1, median)
-    rowmad <- apply(dataset, 1, mad)
-    rv <- sweep(dataset, 1, rowmed)
-    rv <- sweep(rv, 1, rowmad, "/")
-    return(rv)
-}
-
-#Create heatmap of top genes
-gen.topgenes <- function(filename, lumi.object, maintitle, rowmads, num.genes)
-{
-    top.genes.names <- rowmads[1:num.genes]
-    dataset <- exprs(lumi.object)
-    top.genes.intensities <- dataset[top.genes.names,]
-    top.genes.dist <- dist(t(standardize(top.genes.intensities)))
-    top.genes.clust <- flashClust::hclust(top.genes.dist)
-    top.genes.matrix <- as.matrix(top.genes.dist)
-
-    CairoPDF(filename, width = 10, height = 10)
-    heatmap.plus(top.genes.matrix, col = rev(heat.colors(75)), distfun = function (x) as.dist(x), main = maintitle, scale = "none", ColSideColors = cbind(lumi.object$Batch.Color, lumi.object$Diagnosis.Color), cexRow = 0.08, cexCol = 0.08)
-    dev.off()
-    return(top.genes.dist)
-}
-
-#MDS function - may need work
-gen.pca <- function(filename, dataset, targetset, colorscheme, variablename)
-{
+#MDS function 
+MDSPlot <- function(filename, dataset, targetset, colorscheme = "none", variablename) {
     dataset.plot <- data.frame(rownames(dataset$points), dataset$points)
-    target.data <- data.frame(targetset$Sample.Name, factor(targetset[[variablename]]))
-    colnames(target.data) <- c("Sample.Status", variablename)
-    colnames(dataset.plot) <- c("Sample.Status", "Component.1", "Component.2")
+    target.data <- data.frame(targetset$Slide.ID, factor(targetset[[variablename]]))
+    colnames(target.data) <- c("Slide.ID", variablename)
+    colnames(dataset.plot) <- c("Slide.ID", "Component.1", "Component.2")
     dataset.plot <- merge(dataset.plot, target.data)
     p <- ggplot(dataset.plot, aes_string(x = "Component.1", y = "Component.2", col = variablename)) + geom_point() 
     p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-    p <- p + scale_fill_manual(values = colorscheme) 
+    if (colorscheme != "none") {
+        p <- p + scale_color_manual(values = colorscheme) 
+    }
     p <- p + xlab("Component 1") + ylab("Component 2") + ggtitle(variablename)
     CairoPDF(file = filename, height = 7, width = 7)
     print(p)
     dev.off()
 }
 
-#Run statistical cutoff tests
-gen.decide <- function(test, fit.object, write.results)
-{
-    results <- decideTests(fit.object, adjust.method = test[1], p = as.numeric(test[2])) #Run test at specified cutoff
-    if(write.results == TRUE)
-    {
-        write.fit(file = paste("./fit_", test[1], ".tsv", sep = ""), fit.object, adjust = test[1], results = results)
-    }
-    num.genes <- length(which(apply(results, 1, function (x) any(x, na.rm = T))))  #Make this better
-    mysum <- summary(results)[-2,] #Eliminate the row for no change in expression
-    mysum[2,] <- -(mysum[2,])
-    colnames(mysum) <- c("Carrier_vs._Control", "Patient_vs._Control", "Patient_vs._Carrier")
-    mysum <- data.frame("Test" = paste(test[1], " p<", test[2], sep = ""), "Num" = paste(num.genes, "Genes", sep = " "), "Direction" = c("positive", "negative"), mysum)
-    return(mysum)
-}
-
-#Plot statistical cutoff tests
-gen.decideplot <- function(filename, decide.plot, width.plot = 6, height.plot = 7)
-{
-    decide.plot$variable <- str_replace_all(decide.plot$variable, "_", " ")
-    p <- ggplot()
-    p <- p + geom_bar(data = subset(decide.plot, Direction == "positive"),  aes(x = variable, y = value), stat = "identity", colour = "black", fill = "red", position = "dodge")   
-    p <- p + geom_text(data = subset(decide.plot, Direction == "positive"), stat = "identity", size = 4, aes(x = variable, y = value, ymax = max(value) + 110, label = value), hjust = -0.3, position = position_dodge(width = 1))
-    p <- p + geom_bar(data = subset(decide.plot, Direction == "negative"),  aes(x = variable, y = value), stat = "identity", colour = "black", fill = "green", position = "dodge") 
-    p <- p + geom_text(data = subset(decide.plot, Direction == "negative"), stat = "identity", size = 4, aes(x = variable, y = value, ymax = min(value) - 110, label = abs(value)), hjust = 1.3, position = position_dodge(width = 1))
-    if (length(unique(decide.plot$Test)) > 1)
-    {
-        p <- p + facet_grid(Num + Test ~ .) 
-        #p <- p + ggtitle("Threshold Selection")
-    }
-    #else
-    #{
-        #p <- p + ggtitle(paste(decide.plot$Test, "\n", decide.plot$Num))
-    #}
-    p <- p + theme_bw() + coord_flip() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
-    p <- p + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_text(hjust = 0))# + ylab("Differentially Expressed Genes")
-    CairoPDF(filename, width = width.plot, height = height.plot)
-    print(p)
-    dev.off()
-}
-
-gen.pval.hist <- function(filename, fit.pvals)
-{
-    colnames(fit.pvals) <- c("Carrier_vs._Control", "Patient_vs._Control", "Patient_vs._Carrier")
-    fit.pvals.plot <- melt(fit.pvals)
-    fit.pvals.plot$Contrasts <- str_replace_all(fit.pvals.plot$Contrasts, "_", " ")
-    p <- ggplot(fit.pvals.plot, aes(x = value)) + geom_histogram(binwidth = 1/80) + facet_grid(. ~ Contrasts)
-    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-    p <- p + ggtitle("P-value distribution across contrasts") + theme(axis.title.y = element_blank()) + xlab("p-value")
-    CairoPDF(filename, height = 7, width = 21)
-    print(p)
-    dev.off()
-}
-
-gen.venndiagram <- function(filename, results)
-{
-    sumV <- colSums(summary(results)[-2,])
-    v <- paste(c("Carrier vs. Control", "Patient vs. Control", "Patient vs. Carrier"), " (", sumV, ")", sep = "")
-    CairoPDF(filename, width = 6, height = 6)
-    vennDiagram(results, names = v, main = "", include = c("up", "down"), counts.col=c(2,3), cex = 0.8)
-    dev.off()
-}
-
-#Peer analysis
-gen.peer <- function(num.factors, intensities, use.covariates, covariates)
-{
-    model = PEER() #Instantiate PEER object
-    PEER_setNk(model, num.factors) #Specify the number of factors to find
-    PEER_setPhenoMean(model, as.matrix(t(intensities))) #Provide mean values for each subject
-    PEER_setAdd_mean(model, TRUE) #Enable use of mean in linear model
-    if (use.covariates == TRUE)
-    {
-        PEER_setCovariates(model, as.matrix(covariates)) #Add additional covariates
-    }
-    PEER_setNmax_iterations(model, 1000) #Specify the maximum number of iterations
-    PEER_update(model) #Calculate factors
-    residuals.PEER = t(PEER_getResiduals(model))
-    rownames(residuals.PEER) = rownames(intensities)
-    colnames(residuals.PEER) = colnames(intensities)
-
-    write.csv(data.frame(residuals.PEER), file = paste("residuals_", num.factors, sep = "", ".csv"), row.names = FALSE)
-    write.csv(data.frame(PEER_getX(model)), file = paste("factor_", num.factors, sep = "", ".csv"), row.names = FALSE)
-    write.csv(data.frame(PEER_getW(model)), file = paste("weight_", num.factors, sep = "", ".csv"), row.names = FALSE)
-    write.csv(data.frame(PEER_getAlpha(model)), file = paste("precision_", num.factors, sep = "", ".csv"), row.names = FALSE)
-
-    if (require(Cairo))
-    {
-        CairoPDF(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
-        PEER_plotModel(model)
-        dev.off()
-
-        CairoPDF(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
-        plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
-        dev.off()
-    }
-    else
-    {
-        pdf(file = paste("model", num.factors, ".pdf", sep = ""), width = 10, height = 10)
-        PEER_plotModel(model)
-        dev.off()
-
-        pdf(file = paste("precision_", num.factors, ".pdf", sep = ""), width = 10, height = 10)
-        plot(PEER_getAlpha(model), col = "red", lwd = 4, main = paste("precision", num.factors, "factor", sep = " "))
-        dev.off()
-    }    
-}
-
-#Calculate ratios.  
-gen.ratios <- function(expr.final, pdata)
-{
-    all.controls <- expr.final[,pdata$Status == "Control"]
-    all.controls.means <- rowMeans(all.controls)
-    all.carriers <- expr.final[,pdata$Status == "Carrier"]
-    all.carriers.means <- rowMeans(all.carriers)
-    all.patients <- expr.final[,pdata$Status == "Patient"]
-
-    all.coefficients.car.cont <- all.carriers - all.controls.means
-    all.coefficients.pat.cont <- all.patients - all.controls.means
-    all.coefficients.pat.car <- all.patients - all.carriers.means
-    colnames(all.coefficients.pat.car) <- paste(colnames(all.coefficients.pat.car), "_vs_carr", sep = "")
-
-    all.coefficients <- data.frame("Symbol" = rownames(all.coefficients.car.cont), all.coefficients.car.cont, all.coefficients.pat.cont, all.coefficients.pat.car)
-    all.samples <- data.frame("Symbol" = rownames(expr.final), expr.final)
-    colnames(all.samples)[2:length(all.samples)] <- paste(colnames(all.samples[2:length(all.samples)]), "expr", sep = ".") 
-    ratio.exp <- merge(all.coefficients, all.samples)
-    return(ratio.exp)
-}
-
-gen.group.ratios <- function(expr.final, pdata) 
-{
-    controls <- expr.final[,pdata$Status == "Control"]
-    controls.means <- rowMeans(controls)
-    carriers <- expr.final[,pdata$Status == "Carrier"]
-    carriers.means <- rowMeans(carriers)
-    patients <- expr.final[,pdata$Status == "Patient"]
-    patients.means <- rowMeans(patients)
-
-    cc.logratio <- carriers.means - controls.means
-    pco.logratio <- patients.means - controls.means
-    pca.logratio <- patients.means - carriers.means
-    logratio.df <- data.frame(Carrier.Control.log2FC = cc.logratio, Patient.Control.log2FC = pco.logratio, Patient.Carrier.log2FC = pca.logratio)
-    return(logratio.df)
-}
-
-#Generate fit object
-gen.fit.block <- function(dataset, model.design, correlation.vector, block.vector)
-{
-    fit <- lmFit(dataset, design = model.design, correlation = correlation.vector, block = block.vector)
-    contrasts.anova <- makeContrasts(time1.carrier_vs_time1.control = Carrier - Control, time1.patient_vs_time1.control = Patient - Control, time1.patient_vs_time1.carrier = Patient - Carrier, levels = model.design)
-    fit2.anova <- contrasts.fit(fit, contrasts.anova)
-    fitb <- eBayes(fit2.anova)
-}
-
-gen.fit <- function(dataset, model.design)
-{
-    fit <- lmFit(dataset, design = model.design)
-    contrasts.anova <- makeContrasts(time1.carrier_vs_time1.control = Carrier - Control, time1.patient_vs_time1.control = Patient - Control, time1.patient_vs_time1.carrier = Patient - Carrier, levels = model.design)
-    fit2.anova <- contrasts.fit(fit, contrasts.anova)
-    fitb <- eBayes(fit2.anova)
-}
-
-gen.workbook <- function(dataset, filename)
-{
-    pval.cols <- colnames(dataset) %>% str_detect("p.value.") %>% which
-    coef.cols <- colnames(dataset) %>% str_detect("Coef.") %>% which
-    colnames(dataset)[coef.cols] %<>% str_replace("Coef.", "")
-    #dataset$Definition %<>% str_replace_all("Homo sapiens ", "") %>% str_replace_all("PREDICTED: ", "")
+#Make Excel spreadsheet
+DEWorkbook <- function(de.table, filename) { 
+    pval.cols <- colnames(de.table) %>% str_detect("P.Value") %>% which
+    adj.pval.cols <- colnames(de.table) %>% str_detect("adj.P.Val") %>% which
+    coef.cols <- colnames(de.table) %>% str_detect("logFC") %>% which
 
     wb <- createWorkbook()
     addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
-    writeDataTable(wb = wb, sheet = 1, x = dataset, withFilter = FALSE)
+    writeDataTable(wb = wb, sheet = 1, x = de.table)
     sig.pvalues <- createStyle(fontColour = "red")
-    conditionalFormatting(wb, 1, cols = pval.cols, rows = 1:nrow(dataset), rule = "<0.05", style = sig.pvalues)
-    conditionalFormatting(wb, 1, cols = coef.cols, rows = 1:nrow(dataset), style = c("#63BE7B", "white", "red"), type = "colourScale")
+    conditionalFormatting(wb, 1, cols = pval.cols, rows = 1:nrow(de.table), rule = "<0.005", style = sig.pvalues)
+    conditionalFormatting(wb, 1, cols = adj.pval.cols, rows = 1:nrow(de.table), rule = "<0.05", style = sig.pvalues)
+    conditionalFormatting(wb, 1, cols = coef.cols, rows = 1:nrow(de.table), style = c("#63BE7B", "white", "red"), type = "colourScale")
     setColWidths(wb, 1, cols = 1, widths = "auto")
     setColWidths(wb, 1, cols = 2, widths = 45)
-    setColWidths(wb, 1, cols = 3:5, widths = 15)
-    #setColWidths(wb, 1, cols = 5:7, widths = 15)
+    setColWidths(wb, 1, cols = 3:12, widths = 15)
     pageSetup(wb, 1, orientation = "landscape", fitToWidth = TRUE)
     freezePane(wb, 1, firstRow = TRUE)
     showGridLines(wb, 1, showGridLines = TRUE)
-    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
-
+    modifyBaseFont(wb, fontSize = 11)
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-#Create genelists
-gen.tables <- function(dataset, lumi.object, ratio.exp, suffix)
-{
-    treat.de <- data.frame("Symbol" = rownames(dataset), dataset)
-    #colnames(treat.de)[str_detect(colnames(treat.de), "Genes")] %<>% str_replace("Genes\\.", "") %>% tolower %>% capitalize
-    
-
-    fitsel.ratio.all <- merge(treat.de, ratio.exp)
-    #fitsel.ratio.all$RefSeq <- lookUp(as.character(fitsel.ratio.all$nuID), "lumiHumanAll.db", "REFSEQ") %>% llply(paste, collapse = ",") %>% reduce(c)
-    #fitsel.ratio.all$UniGene <- lookUp(as.character(fitsel.ratio.all$nuID), "lumiHumanAll.db", "UNIGENE") %>% llply(paste, collapse = ",") %>% reduce(c)
-    #fitsel.ratio.all$EntrezID <- lookUp(as.character(fitsel.ratio.all$nuID), "lumiHumanAll.db", "ENTREZID") %>% llply(paste, collapse = ",") %>% reduce(c)
-
-    #ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-    #bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(fitsel.ratio.all$Symbol), mart = ensembl)
-    #bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
-    #colnames(bm.table) <- c("Symbol", "Definition")
-    #fitsel.ratio.all <- join(fitsel.ratio.all, bm.table)
-
-    fitsel.return.all <- select(fitsel.ratio.all, Symbol, contains("Coef."), contains("p.value."), F, F.p.value, contains("Res."), contains("^t."), A, matches("CHOP|NG")) %>% arrange(desc(F))
-
-    anovalist <- apply(select(fitsel.return.all, contains("Res")), 1, any, na.rm = T) %>% which
-    fitsel.return <- fitsel.return.all[anovalist,]
-    coef.cols <- colnames(fitsel.return) %>% str_detect("Coef.") %>% which
-    colnames(fitsel.return)[coef.cols] <- c("Coef.Carrier vs. Control", "Coef.Patient vs. Control", "Coef.Patient vs. Carrier")
-
-    gen.workbook(fitsel.return, paste("./significant_geneList_", suffix, "_time1.xlsx", sep = ""))
-
-    #Carrier - Control
-    cc.abs <- as.numeric(fitsel.return$"Coef.Carrier vs. Control") %>% abs
-    fitsel.cc <- select(fitsel.return, Symbol, matches("Coef.Carrier vs. Control"), matches("Coef.Patient vs. Control"), matches("Coef.Patient vs. Carrier")) %>% mutate(cc.abs) %>% arrange(desc(cc.abs)) %>% select(-cc.abs)
-    gen.small.workbook(fitsel.cc, paste("./significant_geneList_", suffix, "_time1_cc.xlsx", sep = ""))
-
-    #Patient - Control
-    pco.abs <- as.numeric(fitsel.return$"Coef.Patient vs. Control") %>% abs
-    fitsel.pco <- select(fitsel.return, Symbol, matches("Coef.Patient vs. Control"), matches("Coef.Carrier vs. Control"), matches("Coef.Patient vs. Carrier"), contains("p.value.")) %>% mutate(pco.abs) %>% arrange(desc(pco.abs)) %>% select(-pco.abs)
-    gen.small.workbook(fitsel.pco, paste("./significant_geneList_", suffix, "_time1_pco.xlsx", sep = ""))
-
-    #Patient - Carrier
-    pca.abs <- as.numeric(fitsel.return$"Coef.Patient vs. Carrier") %>% abs
-    fitsel.pca <- select(fitsel.return, Symbol, matches("Coef.Patient vs. Carrier"), matches("Coef.Patient vs. Control"), matches("Coef.Carrier vs. Control")) %>% mutate(pca.abs) %>% arrange(desc(pca.abs)) %>% select(-pca.abs)
-    gen.small.workbook(fitsel.pca, paste("./significant_geneList_", suffix, "_time1_pca.xlsx", sep = ""))
-
-    #write.csv(fitsel.return.all, paste("./complete_genelist_time1_", suffix, ".csv", sep = ""), row.names = FALSE)
-    return(fitsel.return)
-}
-
-gen.small.workbook <- function(dataset, filename)
-{
-    coef.cols <- colnames(dataset) %>% str_detect("Coef.") %>% which
-    colnames(dataset)[coef.cols] %<>% str_replace("Coef.", "")
-    #dataset$Definition %<>% str_replace_all("Homo sapiens ", "") %>% str_replace_all("PREDICTED: ", "")
-
-    wb <- createWorkbook()
-    addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
-    writeDataTable(wb = wb, sheet = 1, x = dataset, withFilter = FALSE)
-    conditionalFormatting(wb, 1, cols = coef.cols, rows = 1:nrow(dataset), style = c("#63BE7B", "white", "red"), type = "colourScale")
-    setColWidths(wb, 1, cols = 2, widths = "auto")
-    setColWidths(wb, 1, cols = 1, widths = "auto")
-    setColWidths(wb, 1, cols = 3, widths = 45)
-    setColWidths(wb, 1, cols = 4:6, widths = 15)
-    pageSetup(wb, 1, orientation = "landscape", fitToWidth = TRUE)
-    freezePane(wb, 1, firstRow = TRUE)
-    showGridLines(wb, 1, showGridLines = TRUE)
-    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
-
-    saveWorkbook(wb, filename, overwrite = TRUE) 
-}
-    
-#Make anova objects
-gen.anova <- function(dataset, suffix)
-{
-    plot.cc <- filter(dataset, Res.cc != 0) %>% select(matches("Car$"))
-    plot.pc <- filter(dataset, Res.pco != 0) %>% select(matches("Pat$"))
-    plot.pcar <- filter(dataset, Res.pca != 0) %>% select(matches("carr$"))
-    if (dim(plot.cc)[1] > 0)
-    { gen.anova.heatmap(paste("./anova_heatmap_carrier_vs_control", suffix, sep = "_"), plot.cc, "Carriers vs. Controls") }
-    anova.pco <- gen.anova.heatmap(paste("./anova_heatmap_patient_vs_control", suffix, sep = "_"), plot.pc, "Patients vs. Controls")
-    anova.pca <- gen.anova.heatmap(paste("./anova_heatmap_patient_vs_carrier", suffix, sep = "_"), plot.pcar, "Patients vs. Carriers")
-    return(list(anova.pco, anova.pca))
-}
-
-#Generate anova heatmaps
-gen.anova.heatmap <- function(filename, dataset, maintitle)
-{ 
-    CairoPDF(filename, width = 28, height = 10)
-    heatmap.object <- heatmap.2(as.matrix(dataset), col = rev(redgreen(48)), breaks=(c(-3, -2.5, -2, -1.5, seq(-1, 1, 0.05), 1.5, 2, 2.5, 3)), trace = "none", cexCol = 0.3, labRow = "", keysize = 0.9)
+#Plot number of genes at each threshold
+DecidePlot <- function(decide.plot, filename, width.plot = 6, height.plot = 7) {
+    decide.ggplot <- ggplot() + geom_bar(data = subset(decide.plot, Direction == "positive"),  aes(x = Contrast, y = Num.Genes), stat = "identity", colour = "black", fill = "red", position = "dodge")   
+    decide.ggplot <- decide.ggplot + geom_text(data = subset(decide.plot, Direction == "positive"), stat = "identity", size = 4, aes(x = Contrast, y = Num.Genes, ymax = max(Num.Genes) + 110, label = Num.Genes), hjust = -0.3, position = position_dodge(width = 1))
+    decide.ggplot <- decide.ggplot + geom_bar(data = subset(decide.plot, Direction == "negative"),  aes(x = Contrast, y = Num.Genes), stat = "identity", colour = "black", fill = "green", position = "dodge") 
+    decide.ggplot <- decide.ggplot + geom_text(data = subset(decide.plot, Direction == "negative"), stat = "identity", size = 4, aes(x = Contrast, y = Num.Genes, ymax = min(Num.Genes) - 110, label = abs(Num.Genes)), hjust = 1.3, position = position_dodge(width = 1))
+    decide.ggplot <- decide.ggplot + facet_grid(Test + Num ~ .) 
+    decide.ggplot <- decide.ggplot + theme_bw() + coord_flip() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+    decide.ggplot <- decide.ggplot + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_text(hjust = 0))
+    CairoPDF(filename, width = width.plot, height = height.plot)
+    print(decide.ggplot)
     dev.off()
-    #heatmap.object <- heatmap.2(as.matrix(dataset), col = rev(redgreen(48)), breaks=(c(-3, -2.5, -2, -1.5, seq(-1, 1, 0.05), 1.5, 2, 2.5, 3)), trace = "none", cexCol = 0.3, labRow = "", labCol = "", keysize = 0.9)
-    return(heatmap.object)
+}
+
+#Volcano plot
+VolcanoPlot <- function(top.table, filename, pval.column = "P.Value", log.column = "logFC", xlabel = "Log Fold Change", ylabel = "Log.Pvalue")
+{
+    top.table$Log.Pvalue <- -log10(top.table[[pval.column]])
+    p <- ggplot(top.table, aes_string(x = log.column, y = "Log.Pvalue")) + geom_point(aes(color = Significant))
+    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    p <- p + theme(legend.position = "none")
+    p <- p + xlab(xlabel) + ylab(ylabel)
+    CairoPNG(str_c(filename, ".png"), width = 300, height = 300)
+    print(p)
+    dev.off()
+}
+
+GeneBoxplot <- function(lumi.object, gene.symbol) {
+    gene.expr <- as.vector(exprs(lumi.object[gene.symbol,]))
+    gene.df <- data.frame(Status = lumi.object$Status, Expression = gene.expr)
+    gene.df$Status %<>% factor(levels = c("Control", "Carrier", "Patient"))
+
+    p <- ggplot(gene.df, aes(x = Status, y = Expression, fill = Status)) + geom_violin() + geom_boxplot(width = 0.1) + theme_bw()
+    p <- p + theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    CairoPDF(str_c(gene.symbol, ".pdf"), width = 6, height = 6)
+    print(p)
+    dev.off()
 }
 
 #GO functions
-enrichr.submit <- function(colname, dataset, enrichr.terms, subdir)
-{
-    filter.cond <- paste(paste(colname, '==', '1'), paste(colname, "==", '-1'), sep = "|")
-    dataset.submit <- filter_(dataset, filter.cond)
-    colname.formatted <- str_replace_all(colname, "time1\\.", "") %>% str_replace("Res\\.", "")
-    write.xlsx(dataset.submit, file.path("./enrichr", subdir, paste(colname.formatted, "xlsx", sep = ".")))
-
-    dir.create(file.path("./enrichr", subdir), showWarnings = FALSE)
-    enrichr.data <- map(enrichr.terms, get.enrichrdata, dataset.submit, FALSE)
+EnrichrSubmit <- function(dataset, enrichr.terms, colname) {
+    dir.create(file.path("./enrichr", colname), showWarnings = FALSE)
+    enrichr.data <- map(enrichr.terms, GetEnrichrData, dataset, FALSE)
     enrichr.names <- enrichr.terms[!is.na(enrichr.data)]
     enrichr.data <- enrichr.data[!is.na(enrichr.data)]
 
     names(enrichr.data) <- enrichr.names
 
-    map(names(enrichr.data), enrichr.wkbk, enrichr.data, colname, subdir, "enrichr")
-    return(enrichr.data)
+    map(names(enrichr.data), EnrichrWorkbook, enrichr.data, colname)
+    enrichr.data
 }
 
-enrichr.wkbk <- function(database, full.df, colname, subdir, direction)
-{
+EnrichrWorkbook <- function(database, full.df, colname) {
     dataset <- full.df[[database]]
 
     wb <- createWorkbook()
     addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
     writeDataTable(wb = wb, sheet = 1, x = dataset, withFilter = TRUE)
     freezePane(wb, 1, firstRow = TRUE)
-    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
     setColWidths(wb, 1, cols = c(1, 3:ncol(dataset)), widths = "auto")
     setColWidths(wb, 1, cols = 2, widths = 45)
-    colname.formatted <- str_replace_all(colname, "time1\\.", "") %>% str_replace("Res\\.", "")
     
-    dir.create(file.path("./enrichr", subdir, colname.formatted, direction), recursive = TRUE)
-    filename = paste(file.path("./enrichr", subdir, colname.formatted, direction, database), ".xlsx", sep = "")
+    dir.create(file.path("./enrichr", colname), recursive = TRUE)
+    filename = str_c(file.path("./enrichr", colname, database), ".xlsx")
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-#PCA Analysis
-subset.pca <- function(res.col, fit.selection, export.lumi, suffix)
-{
-    genes.key <- which(fit.selection[[res.col]] != 0)
-    if (length(genes.key) > 0)
-    {
-        genes.nuID <- fit.selection$nuID[genes.key]
-        exprs.key <- match(genes.nuID, featureNames(export.lumi))
-        lumi.subset <- export.lumi[exprs.key,]
-        colname.formatted <- str_replace_all(res.col, "time1\\.", "") %>% str_replace("Res\\.", "")
-
-        #Only include the two groups being compared
-        split.name <- str_split(colname.formatted, "_") %>% unlist    
-        status.first <- capitalize(split.name[1])    
-        status.second <- capitalize(split.name[3])    
-        status.key <- export.lumi$Status == status.first | export.lumi$Status == status.second
-        lumi.subset.status <- lumi.subset[,status.key]
-        exprs.subset <- exprs(lumi.subset.status)
-            
-        exprs.dist <- standardize(exprs.subset) %>% t %>% dist
-        mds.expr <- cmdscale(exprs.dist, eig = TRUE)
-
-        filename <- paste("subgroup_pca", colname.formatted, suffix, sep = "_")
-        #CairoPDF(filename, height = 20, width = 20)
-        #scatterplot3d(mds.expr$points, color = lumi.subset.status$Diagnosis.Color, pch = 1, main = "3 Dimensional MDS", type = "h", lty.hplot = 2, grid = TRUE, box = TRUE)
-        #dev.off()
-        gen.pca(filename, mds.expr, phenoData(lumi.subset.status), diagnosis.colors, "Status")
-        return(mds.expr)
-    }
-    else
-    {
-        return(NA)     
-    }
-}
-
-gen.enrichrplot <- function(enrichr.df, enrichr.expr, filename, plot.height = 5, plot.width = 8)
-{
-    enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-    enrichr.df$Log.pvalue <- -(log10(enrichr.df$P.value))
-    enrichr.updown <- map(enrichr.df$Genes, get.updown, enrichr.expr) %>% reduce(rbind)
+EnrichrPlot <- function(enrichr.df, enrichr.expr, filename, plot.height = 5, plot.width = 8) {
+    enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map(unlist) %>% map_int(length)
+    enrichr.df$Log.pvalue <- -(log10(enrichr.df$Adj.P.value))
+    enrichr.updown <- map(enrichr.df$Genes, UpDown, enrichr.expr) %>% reduce(rbind)
     colnames(enrichr.updown) <- c("Up", "Down")
     enrichr.df <- cbind(enrichr.df, enrichr.updown)
     enrichr.df$Log.Up <- enrichr.df$Log.pvalue * enrichr.df$Up / enrichr.df$Gene.Count
@@ -565,356 +202,150 @@ gen.enrichrplot <- function(enrichr.df, enrichr.expr, filename, plot.height = 5,
     enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
     enrichr.df %<>% arrange(Log.pvalue)
     enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
-    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.Up, Log.Down) %>% melt(id.vars = "Format.Name") 
+    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.Up, Log.Down) %>% gather(Direction, Length, -Format.Name) 
 
-    p <- ggplot(enrichr.df.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = c(as.character(enrichr.df$Format.Name), rep("", nrow(enrichr.df))), hjust = "left", aes(y = 0.1)) + scale_fill_discrete(name = "Direction", labels = c("Up", "Down"))
+    p <- ggplot(enrichr.df.plot, aes(Format.Name, Length, fill = Direction)) + geom_bar(stat = "identity") + geom_text(label = c(as.character(enrichr.df$Format.Name), rep("", nrow(enrichr.df))), hjust = "left", aes(y = 0.1)) + scale_fill_discrete(name = "Direction", labels = c("Up", "Down"))
     p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
     CairoPDF(filename, height = plot.height, width = plot.width)
     print(p)
     dev.off()
 }
 
-get.updown <- function(filter.vector, enrichr.df)
-{
+UpDown <- function(filter.vector, enrichr.df) {
     split.vector <- str_split(filter.vector, ",")[[1]]
-    grep.vector <- match.exact(split.vector)
-    enrichr.filter <- filter(enrichr.df, grepl(grep.vector, Symbol))
-    enrichr.vector <- c("Up" = length(which(enrichr.filter[,2] == 1)), "Down" = length(which(enrichr.filter[,2] == -1)))
-    return(enrichr.vector)
+    enrichr.filter <- filter(enrichr.df, is.element(Symbol, split.vector))
+    enrichr.vector <- c("Up" = length(which(sign(enrichr.filter$z.value) == 1)), "Down" = length(which(sign(enrichr.filter$z.value) == -1)))
+    enrichr.vector
 }
 
-load("../phenotypedata/targets.final.rda")
-colnames(targets.final)[4] <- "sampleID"
+FilterEnrichr <- function(enrichr.table, p.value, filename, cluster = FALSE, ebam.df = data.frame()) {
+    enrichr.table$Num.Genes <- map(enrichr.table$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
+    enrichr.table %<>% filter(Num.Genes > 4) %>% filter(P.value < p.value)
+    if(cluster == TRUE) {
+        GetKappaCluster(enrichr.table, ebam.df$Symbol, file_path_sans_ext(filename))
+    }
+    enrichr.table
+}
 
-#remove some duplicate arrays
-bad.slides <- c("3998573091_J", "3998573091_L", "3998582035_G") %>% paste(collapse = "|") 
-targets.final %<>% filter(!grepl(bad.slides, sampleID))
+#Code for getting size of objects in memory
+objects.size <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
+names(objects.size) <- ls()
+unlist(objects.size) %>% sort
 
-#Note: Probe profiles in .csv format need to be converted to .tsv files because lumi produces errors when reading .csvs
+source("../common_functions.R") #Load shared functions
+targets.final <- ReadRDSgz("../phenotypedata/targets.final.rda") #Load phenotype data
+
 #Drop probes not found in all batches - this step is NOT normally necessary, was needed due to some inconsistencies in the 
 #settings used with GenomeStudio which cannot be resolved easily
 filenames <- list.files("../raw_data/", pattern = "*.txt|*.tsv", full.names = TRUE) #Get list of batch files
+filenames.csv <- list.files("../raw_data/", pattern = "*.csv", full.names = TRUE)
 intensities.list <- map(filenames, read_tsv) #Read files in to a list
+intensities.csv <- read_csv(filenames.csv)
+intensities.list %<>% list.append(intensities.csv)
 intensities.mat <- reduce(intensities.list, merge) #Merge all of the batches into one table
 write.table(intensities.mat, "../raw_data/all_batches.tsv", sep = "\t", row.names = FALSE) #Save table to disk
 
 #Read in raw data and remove unrelated samples
 lumi.raw <- lumiR("../raw_data/all_batches.tsv", lib.mapping = "lumiHumanIDMapping", checkDupId = TRUE, convertNuID = TRUE, QC = FALSE) #Read in the joined batches
-frda.key <- match(targets.final$sampleID, colnames(lumi.raw)) #Match sample names in targets table to samples in lumi object
+frda.key <- match(targets.final$Slide.ID, colnames(lumi.raw)) #Match sample names in targets table to samples in lumi object
 lumi.raw <- lumi.raw[,frda.key] #Subset lumi object to get rid of unrelated samples
 
-rownames(targets.final) <- targets.final$sampleID #Set the row names to be the same as the sampleID (may be unnecessary)
+rownames(targets.final) <- targets.final$Slide.ID #Set the row names to be the same as the sampleID (may be unnecessary)
 pData(lumi.raw) <- targets.final #Add phenotype data
-sampleNames(lumi.raw) <- lumi.raw$Sample.Name #Add sample names
+SaveRDSgz(lumi.raw, "./save/lumi.raw.rda")
 
+#remove some duplicate arrays
+duplicate.slides <- c("6303230097_F", "7649540101_A", "6303248029_G", "9534190037_D", "3998573091_J", "3998573091_L", "3998582035_G", "3998573091_B", "3998573091_C", "200654510056_C", "3998573091_K", "6116733118_B", "200654510052_A", "200661380016_J", "3998573126_J", "3998573117_C", "5406958033_C", "3998582041_D") %>% paste(collapse = "|") 
+duplicate.key <- !grepl(duplicate.slides, lumi.raw$Slide.ID) #Find which samples are not duplicates
 knownstatus.key <- !grepl("Unknown|UNKNOWN", lumi.raw$Status) #Find which samples don't have missing FA status
 notsuspect.key <- !grepl("6165|6172|6174", lumi.raw$PIDN) #Find which samples don't have PIDNs with suspect FA status
-knownage.key <- !is.na(lumi.raw$Draw.Age) #Find which samples have a valid date of birth
-combined.key <- knownstatus.key & notsuspect.key & knownage.key #Find which samples pass all three of the above filters
+knownage.key <- !is.na(lumi.raw$Age) #Find which samples have a valid date of birth
+knownrin.key <- !is.na(lumi.raw$RIN) #Find which samples have a valid RIN
+knownsex.key <- !is.na(lumi.raw$Sex) #Find which samples have a valid Sex
+combined.key <- duplicate.key & knownstatus.key & notsuspect.key & knownage.key & knownrin.key & knownsex.key #Find which samples pass all of the above filters
 lumi.known <- lumi.raw[,combined.key] #Subset the lumi object according the values in combined.key
 lumi.known$Status %<>% droplevels #remove UNKNOWN from possible values of Status
+lumi.known$Sex %<>% droplevels #remove UNKNOWN from possible values of Sex
+lumi.known$Sample.Num %<>% str_replace("r", "") %>% as.numeric
 
 lumi.vst <- lumiT(lumi.known) #Perform variance stabilized transformation
-saveRDS.gz(lumi.known, file = "./save/lumi.known.rda")
+SaveRDSgz(lumi.vst, file = "./save/lumi.vst.rda")
 
-baseline.key <- grepl("^1$|1r", lumi.vst$Sample.Num) #Find which samples are baseline
-lumi.baseline <- lumi.vst[,baseline.key] #Subset lumi object for baseline samples
+batch.colors <- data.frame(Batch = factor(1:19), Color = c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green", "blue4", "red4", "green4")) #Assign batch colors
+lumi.vst$Batch.Color <- left_join(select(pData(lumi.vst), Batch), batch.colors) %>% select(Color) #add variable for batch color
+#gen.boxplot("vst_intensity_notnorm.jpg", lumi.vst,  batch.colors, "VST Transformed Intensity not normalized", "Intensity") #Make boxplot of transformed intensities
 
-diagnosis.colors <- c("magenta", "green", "darkcyan")
-heatmap.bars <- gen.heatmapbars(batch.colors, diagnosis.colors, phenoData(lumi.baseline)) %>% data.frame #create colors for heatmap bar
-lumi.baseline$Batch.Color <- as.character(heatmap.bars$Batch.Color) #add variable for batch color
-lumi.baseline$Diagnosis.Color <- as.character(heatmap.bars$Diagnosis.Color) #add variable for diagnosis color
-saveRDS.gz(lumi.baseline, file = "./save/lumi.baseline.rda")
+min.samplenum <- group_by(pData(lumi.known), PIDN) %>% summarise(min(Sample.Num)) %>% data.frame
+colnames(min.samplenum)[2] <- "Sample.Num"
+pdata.baseline <- left_join(min.samplenum, pData(lumi.known))
 
-batch.colors <- c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green", "blue4", "red4") #Assign batch colors
-gen.boxplot("baseline_intensity_notnorm.jpg", lumi.baseline,  batch.colors, "VST Transformed Intensity not normalized", "Intensity") #Make boxplot of transformed intensities
-
+lumi.baseline <- lumi.vst[,pdata.baseline$Slide.ID]
+SaveRDSgz(lumi.baseline, "./save/lumi.baseline.rda")
 lumi.norm <- lumiN(lumi.baseline, method = "rsn") #Normalize with robust spline regression
-lumi.qual <- lumiQ(lumi.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
-lumi.cutoff <- detectionCall(lumi.qual) #Get the count of probes which passed the detection threshold per sample
-lumi.expr <- lumi.qual[which(lumi.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
+lumi.cutoff <- detectionCall(lumi.norm) #Get the count of probes which passed the detection threshold per sample
+lumi.expr <- lumi.norm[which(lumi.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
 symbols.lumi <- getSYMBOL(rownames(lumi.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
 lumi.expr.annot <- lumi.expr[!symbols.lumi,] #Drop any probe which is not annotated
-saveRDS.gz(lumi.expr.annot, file = "./save/lumi.expr.annot.rda")
-
-#The quality control summary can be used to get an idea of what outliers are in the data
-qcsum <- lumi.expr.annot@QC$sampleSummary %>% t %>% data.frame #Extract the quality control summary object
-colnames(qcsum) %<>% str_replace("\\.0\\.01\\.", "")
-qcsum$Sample.Name <- rownames(qcsum) #Add sample name
-qcsum$RIN <- lumi.expr.annot$RIN #Add RIN
-qcsum$Sample.Num <- lumi.expr.annot$Sample.Num #Add sample number
+SaveRDSgz(lumi.expr.annot, file = "./save/lumi.expr.annot.rda")
 
 #Regenerate plots
-gen.boxplot("baseline_intensity_norm.jpg", lumi.expr.annot, batch.colors, "RSN normalized signal intensity", "Intensity") #Make box plot of normalized intensities
-gen.heatmap("baseline_heatmap_norm", lumi.expr.annot, "Clustering Based on Inter-Array Pearson Coefficient, RSN normalized") #Make heatmap of sample clustering
+#gen.boxplot("baseline_intensity_norm.jpg", lumi.expr.annot, batch.colors, "RSN normalized signal intensity", "Intensity") #Make box plot of normalized intensities
+Histogram("histogram_norm", lumi.expr.annot)
+mds.norm <- exprs(lumi.expr.annot) %>% t %>% dist(method = "manhattan") %>% cmdscale(eig = TRUE) #get first two principle components
+MDSPlot("mds_status_norm", mds.norm, pData(lumi.expr.annot), "none", "Status") #label PCs by status
+MDSPlot("mds_batch_norm", mds.norm, pData(lumi.expr.annot), as.character(batch.colors$Color), "Batch") #label PCs by batch
 
-#These QC plots may be somewhat redundant if you have already looked at the QC object
-IAC.norm <- gen.IACcluster("baseline_IAC_norm", exprs(lumi.expr.annot), "All samples") #Make clustering dendrogram of samples
-gen.sdplot("baseline_IAC_sd", IAC.norm, "All samples") #Make plot of standard deviations
-saveRDS.gz(IAC.norm, file = "./save/IAC.norm.rda")
-saveRDS.gz(sd.raw.norm, file = "./save/sd.raw.norm.rda")
+#Remove batch effect
+model.combat <- model.matrix(~ Status + Sex + Age + RIN, pData(lumi.expr.annot))
 
-#Top 500 and 1000 genes
-lumi.mads <- apply(exprs(lumi.expr.annot), 1, mad) #Get median absolute deviations of expression values
-lumi.ordered <- order(lumi.mads, decreasing = TRUE) #Use this to rank the genes by the variability of their expression
-
-top500.dist <- gen.topgenes("baseline_heatmap_500", lumi.expr.annot, "Clustering Based on the Top 500 Most Variable Genes", lumi.ordered, 500) #heatmap of top 500 most variable genes
-top1000.dist <- gen.topgenes("baseline_heatmap_1000", lumi.expr.annot, "Clustering Based on the Top 1000 Most Variable Genes", lumi.ordered, 1000) #heatmap of top 1000 most variable genes
-
-#Principal components analysis
-cm1 <- cmdscale(top1000.dist, eig = TRUE) #get first two principle components
-gen.pca("baseline_mds_status", cm1, phenoData(lumi.expr.annot), diagnosis.colors, "Status") #label PCs by status
-gen.pca("baseline_mds_batch", cm1, phenoData(lumi.expr.annot), batch.colors, "Batch") #label PCs by batch
-
-gen.connectivityplot("baseline_connectivity", lumi.expr.annot, "")
-
-#Remove outlier
-#Potential suspects: CHOP_188_1_Car, CHOP_175_1_Pat
-remove.sample <- !grepl("CHOP_122_1_Pat|CHOP_14_1_Pat|CHOP_540_1_Car|CHOP_124_1_Pat|CHOP_96_1_Car", sampleNames(lumi.baseline))
-lumi.rmout <- lumi.baseline[,remove.sample]# %>% lumiN(method = "rsn")
-
-#####note: In talking with the Geschwind lab about this, they seem to think that renormalizing after remove such a small number of samples is unnecessary.  I have not rigorously examined this, but I think it is worth pointing out that this may be redundant
-lumi.rmout.norm <- lumiN(lumi.rmout, method = "rsn") #Normalize with robust spline regression
-lumi.rmout.qual <- lumiQ(lumi.rmout.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
-lumi.rmout.cutoff <- detectionCall(lumi.rmout.qual) #Get the count of probes which passed the detection threshold per sample
-lumi.rmout.expr <- lumi.rmout.qual[which(lumi.rmout.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
-symbols.lumi.rmout <- getSYMBOL(rownames(lumi.rmout.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
-lumi.rmout.annot <- lumi.rmout.expr[!symbols.lumi.rmout,] #Drop any probe which is not annotated
-saveRDS.gz(lumi.rmout.annot, file = "lumi.rmout.annot.rda")
-
-gen.heatmap("rm1_heatmap", lumi.rmout.annot, "Clustering Based on Inter-Array Pearson Coefficient, Quantile normalized")
-IAC.norm.rm1 <- gen.IACcluster("rm1_IAC", exprs(lumi.rmout.annot), "Outlier removed")
-sd.raw.norm.rm1 <- gen.sdplot("rm1_sd", IAC.norm.rm1, "Outlier removed")
-saveRDS.gz(IAC.norm.rm1, file = "./save/IAC.norm.rm1.rda")
-saveRDS.gz(sd.raw.norm.rm1, file = "./save/sd.raw.norm.rm1.rda")
-
-lumi.rmout.mads <- apply(exprs(lumi.rmout.annot), 1, mad)
-lumi.rmout.ordered <- order(lumi.rmout.mads, decreasing = TRUE)
-top500.dist.norm.rm1 <- gen.topgenes("rm1_heatmap_500", lumi.rmout.annot, "Clustering Based on the Top 500 Most Variable Genes", lumi.rmout.ordered, 500)
-top1000.dist.norm.rm1 <- gen.topgenes("rm1_heatmap_1000", lumi.rmout.annot, "Clustering Based on the Top 1000 Most Variable Genes", lumi.rmout.ordered, 1000)
-
-cm1.rm1 <- cmdscale(top1000.dist.norm.rm1, eig = TRUE)
-gen.pca("rm1_mds_diagnosis", cm1.rm1, phenoData(lumi.rmout.annot), diagnosis.colors, "Status")
-gen.pca("rm1_mds_batch", cm1.rm1, phenoData(lumi.rmout.annot), batch.colors, "Batch")
-
-qcsum.rmout <- lumi.rmout.annot@QC$sampleSummary %>% t %>% data.frame
-colnames(qcsum.rmout) %<>% str_replace("\\.0\\.01\\.", "")
-qcsum.rmout$Sample.Name <- rownames(qcsum.rmout)
-qcsum.rmout$RIN <- lumi.rmout.annot$RIN
-qcsum.rmout$Sample.Num <- lumi.rmout.annot$Sample.Num
-qcsum.rmout$PIDN <- lumi.rmout.annot$PIDN
-arrange(qcsum.rmout, distance.to.sample.mean)
-PIDNs <- filter(qcsum.rmout, Sample.Num == "1r")$PIDN %>% paste(collapse = "|")
-
-rmout.connectivity <- gen.connectivityplot("rmout_connectivity", lumi.rmout.annot, "")
-connectivity.outlier <- rmout.connectivity[abs(rmout.connectivity) > 2] 
-connectivity.sample <- names(connectivity.outlier) %>% as.character %>% match.exact %>% str_detect(sampleNames(lumi.baseline))
-
-lumi.rmout.all <- lumi.rmout.annot[,!connectivity.sample]
-rmout.connectivity <- gen.connectivityplot("rmout_all_connectivity", lumi.rmout.all, "")
-
-#Remove replicates
-#####note: this is only necessary in the very unusual situation in which you have technical replicates (i.e. the same RNA was run on two microarrays)
-##### Other wise you can just skip to the next section
-reps <- sd.raw.norm.rm1[str_detect(names(sd.raw.norm.rm1), "1r")] %>% abs
-orig.key <- str_replace_all(names(reps), "1r", "1")
-orig <- sd.raw.norm.rm1[orig.key] %>% abs
-
-reps.final <- data.frame(orig, reps)
-max.key <- apply(reps.final, 1, which.max)
-reps.names <- data.frame(orig.key, names(reps))
-remove.names <- reps.names[cbind(seq_along(max.key), max.key)]
-
-remove.key <- paste(remove.names, collapse = "|")
-reps.samples <- !grepl(remove.key, sampleNames(lumi.baseline))
-remove.all <-  remove.sample & reps.samples
-saveRDS.gz(remove.all, "./save/remove.all.rda")
-
-lumi.rmreps <- lumi.baseline[,remove.all]
-saveRDS.gz(lumi.rmreps, file = "./save/lumi.rmreps.rda")
-lumi.rmreps.norm <- lumiN(lumi.rmreps, method = "rsn") #Normalize with robust spline regression
-#lumi.rmreps.qual <- lumiQ(lumi.rmreps.norm, detectionTh = 0.01) #The detection threshold can be adjusted here.  It is probably inadvisable to use anything larger than p < 0.05
-lumi.rmreps.cutoff <- detectionCall(lumi.rmreps.norm) #Get the count of probes which passed the detection threshold per sample
-lumi.rmreps.expr <- lumi.rmreps.norm[which(lumi.rmreps.cutoff > 0),] #Drop any probe where none of the samples passed detection threshold
-symbols.lumi.rmreps <- getSYMBOL(rownames(lumi.rmreps.expr), 'lumiHumanAll.db') %>% is.na #Determine which remaining probes are unannotated
-lumi.rmreps.annot <- lumi.rmreps.expr[!symbols.lumi.rmreps,] #Drop any probe which is not annotated
-saveRDS.gz(lumi.rmreps.annot, file = "./save/lumi.rmreps.annot.rda")
-
-gen.heatmap("rmreps_heatmap", lumi.rmreps.annot, "Clustering Based on Inter-Array Pearson Coefficient, Quantile normalized")
-IAC.norm.rmreps <- gen.IACcluster("rmreps_IAC", exprs(lumi.rmreps.annot), "Outlier removed")
-sd.raw.norm.rmreps <- gen.sdplot("rmreps_sd", IAC.norm.rmreps, "Outlier removed")
-saveRDS.gz(IAC.norm.rmreps, file = "./save/IAC.norm.rmreps.rda")
-saveRDS.gz(sd.raw.norm.rmreps, file = "./save/sd.raw.norm.rmreps.rda")
-
-lumi.rmreps.mads <- apply(exprs(lumi.rmreps.annot), 1, mad)
-lumi.rmreps.ordered <- order(lumi.rmreps.mads, decreasing = TRUE)
-top500.dist.norm.rmreps <- gen.topgenes("rmreps_heatmap_500", lumi.rmreps.annot, "Clustering Based on the Top 500 Most Variable Genes", lumi.rmreps.ordered, 500)
-top1000.dist.norm.rmreps <- gen.topgenes("rmreps_heatmap_1000", lumi.rmreps.annot, "Clustering Based on the Top 1000 Most Variable Genes", lumi.rmreps.ordered, 1000)
-
-cm1.rmreps <- cmdscale(top1000.dist.norm.rmreps, eig = TRUE)
-gen.pca("rmreps_mds_diagnosis", cm1.rmreps, phenoData(lumi.rmreps.annot), diagnosis.colors, "Status")
-gen.pca("rmreps_mds_batch", cm1.rmreps, phenoData(lumi.rmreps.annot), batch.colors, "Batch")
-
-#Use ComBat for batch effect correction
-#### note: before running this adjustment, please check that the following things are true:
-# 1) Other covariates are not correlated
-# 2) Batch number is not confounded with another categorical variable (i.e. diagnosis, treatment, sex, etc)
-# 3) Each batch has more than one array in it
-
-lumi.rmreps.annot$Sex %<>% droplevels
-model.combat <- model.matrix(~ Status + Sex + Draw.Age + RIN, pData(lumi.rmreps.annot))
-
-expr.combat <- ComBat(dat = exprs(lumi.rmreps.annot), batch = factor(lumi.rmreps.annot$Site), mod = model.combat) #Run ComBat
-lumi.combat <- lumi.rmreps.annot #Create a new lumi object as a copy of lumi.rmreps.annot
+expr.combat <- ComBat(dat = exprs(lumi.expr.annot), batch = factor(lumi.expr.annot$Site), mod = model.combat) #Run ComBat
+lumi.combat <- lumi.expr.annot #Create a new lumi object as a copy of lumi.expr.annot
 exprs(lumi.combat) <- expr.combat #Update the expression values of the new lumi object to include the new, corrected intensities
 
 expr.combat <- ComBat(dat = exprs(lumi.combat), batch = factor(lumi.combat$Batch), mod = model.combat) #Run ComBat
 exprs(lumi.combat) <- expr.combat #Update the expression values of the new lumi object to include the new, corrected intensities
 
-saveRDS.gz(lumi.combat, file = "./save/lumi.combat.rda")
+SaveRDSgz(lumi.combat, file = "./save/lumi.combat.rda")
 
 #Regenerate plots
-gen.heatmap("combat_heatmap", lumi.combat, "Clustering Based on Inter-Array Pearson Coefficient, Quantile normalized")
-IAC.norm.combat <- gen.IACcluster("combat_IAC", exprs(lumi.combat), "Outlier removed")
-sd.raw.norm.combat <- gen.sdplot("combat_sd", IAC.norm.combat, "Outlier removed")
-saveRDS.gz(IAC.norm.combat, file = "./save/IAC.norm.combat.rda")
-saveRDS.gz(sd.raw.norm.combat, file = "./save/sd.raw.norm.combat.rda")
+#gen.boxplot("combat_intensity_norm.jpg", lumi.expr.annot, batch.colors, "RSN normalized signal intensity", "Intensity") #Make box plot of normalized intensities
+Histogram("histogram_combat", lumi.expr.annot)
+mds.combat <- exprs(lumi.expr.annot) %>% t %>% dist(method = "manhattan") %>% cmdscale(eig = TRUE) #get first two principle components
+MDSPlot("mds_status_combat", mds.combat, pData(lumi.expr.annot), "none", "Status") #label PCs by status
+MDSPlot("mds_batch_combat", mds.combat, pData(lumi.expr.annot), as.character(batch.colors$Color), "Batch") #label PCs by batch
 
-lumi.combat.mads <- apply(exprs(lumi.combat), 1, mad)
-lumi.combat.ordered <- order(lumi.combat.mads, decreasing = TRUE)
-top500.dist.norm.combat <- gen.topgenes("combat_heatmap_500", lumi.combat, "Clustering Based on the Top 500 Most Variable Genes", lumi.combat.ordered, 500)
-top1000.dist.norm.combat <- gen.topgenes("combat_heatmap_1000", lumi.combat, "Clustering Based on the Top 1000 Most Variable Genes", lumi.combat.ordered, 1000)
+#Remove outlier 
+combat.connectivity <- ConnectivityPlot("connectivity", lumi.combat, "")
+connectivity.outlier <- names(combat.connectivity[combat.connectivity < -2])
+remove.key <- !(sampleNames(lumi.combat) %in% connectivity.outlier)
 
-cm1.combat <- cmdscale(top1000.dist.norm.combat, eig = TRUE)
-gen.pca("combat_mds_diagnosis", cm1.combat, phenoData(lumi.combat), diagnosis.colors, "Status")
-gen.pca("combat_mds_batch", cm1.combat, phenoData(lumi.combat), batch.colors, "Batch")
+lumi.rmout <- lumi.combat[,remove.key]
+SaveRDSgz(lumi.rmout, "./save/lumi.rmout.rda")
 
-#Run PEER analysis and correlate to known covariates
-#### note: This may be replaced by HCP in the near future
+#Check for collinearity
+age.all <- lm(Age ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
+age.aov <- aov(Age ~ Status, pData(lumi.rmout)) %>% TukeyHSD
+sex.all <- lm(as.integer(Sex) ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
+sex.aov <- aov(as.integer(Sex) ~ Status, pData(lumi.rmout)) %>% TukeyHSD
+batch.all <- lm(as.integer(Batch) ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
+RIN.all <- lm(RIN ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
+site.all <- lm(as.integer(factor(Site)) ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
 
-source("../../code/hidden_covariate_linear.R")
-
-model.hcp <- standardize.hcp(model.combat)
-expr.hcp <- exprs(lumi.combat) %>% t %>% standardize.hcp
-
-#hcp.covariates <- hidden_covariate_linear(model.hcp, expr.hcp, k = 10, lambda = 1)
-#hcp.factors <- hcp.covariates$Z
-#colnames(hcp.factors) <- paste("X", 1:ncol(hcp.factors), sep = "")
-#hcp.weights <- hcp.covariates$B %>% t
-
-#hcp.model <- data.frame(Status = factor(lumi.combat$Status), hcp.factors)
-
-#hcp.pvals <- map(colnames(hcp.factors), hcp.lm, hcp.model)
-#hcp.lm <- function(hcp.factor, hcp.model)
-#{
-    #lm.formula <- paste(hcp.factor, "~", "Status") %>% as.formula
-    #factor.lm <- lm(lm.formula, hcp.model) %>% anova
-    #return(factor.lm$'Pr(>F)')
-#}
-
-#Plot PEER weights
-#hcp.weights.sums <- colSums(abs(hcp.weights)) %>% data.frame #Get sums of weights for each factor
-#hcp.weights.sums$Factor <- 1:nrow(hcp.weights.sums) #Add column to label by factor
-#colnames(hcp.weights.sums)[1] <- "Weight"
-
-#ggplot of factor versus weight
-#p <- ggplot(hcp.weights.sums, aes(x = factor(Factor), y = as.numeric(Weight), group = 1)) + geom_line(color = "blue") 
-#p <- p + theme_bw() + xlab("Factor") + ylab("Weight")
-#CairoPDF("./hcp_weights", height = 4, width = 6)
-#print(p)
-#dev.off()
-
-#source("../common_functions.R")
-#targets1.gaa <- select(pData(lumi.combat), Sample.Name, GAA1) %>% filter(!is.na(GAA1)) #Get GAA1 value for those patients who have it
-#cor.gaa <- gen.cor(model.PEER_covariate, targets1.gaa) #Correlate to PEER factors
-
-#targets1.onset <- select(pData(lumi.combat), Sample.Name, Onset) %>% filter(!is.na(Onset)) #Get age of onset for those patients who have it
-#cor.onset <- gen.cor(model.PEER_covariate, targets1.onset) #Correlate to PEER factors
-
-#PEER.traits.all <- cbind(cor.gaa, cor.onset) %>% data.frame #Make table of correlation values
-#PEER.traits.pval <- select(PEER.traits.all, contains("p.value")) %>% as.matrix #Extract p values
-#PEER.traits.cor <- select(PEER.traits.all, -contains("p.value")) %>% as.matrix #Extract r-squared values
-
-#text.matrix.PEER <- paste(signif(PEER.traits.cor, 2), '\n(', signif(PEER.traits.pval, 1), ')', sep = '') #make text matrix
-#dim(text.matrix.PEER) <- dim(PEER.traits.cor)
-#gen.text.heatmap(PEER.traits.cor, text.matrix.PEER, colnames(PEER.traits.cor), rownames(PEER.traits.cor), "", "PEER factor-trait relationships") #Make labeled heatmap of correlations of PEER factors to traits
-
-#PEER.trait.out <- data.frame(Factor = rownames(PEER.traits.cor), PEER.traits.cor, PEER.traits.pval) #Write correlations to a table
-#write_csv(PEER.trait.out, "PEER_trait_cor.csv")
-
-#Removing effects of covariates + PEER factors  !!DO NOT USE FOR LINEAR MODELING WITH CONTRASTS!!
-model.cov <- model.combat[,4:6] #Create model matrix of covariates to be removed
-rmcov.expr <- removeBatchEffect(exprs(lumi.combat), covariates = model.cov) #Remove the effects of covariates, with the difference in diagnoses being supplied as the design argument to preserve those group differences
-rmcov.lumi <- lumi.combat #Make a copy of lumi object
-exprs(rmcov.lumi) <- rmcov.expr #Transfer cleaned expression values into new lumi object
-saveRDS.gz(rmcov.lumi, file = "./save/rmcov.lumi.rda")
-gen.boxplot("baseline_intensity_corrected.jpg", rmcov.lumi, batch.colors, "Covariate-corrected intensity", "Intensity") #Replot intensities to make sure they look okay
-
-#Collapse the data by symbol
-pdata <- pData(rmcov.lumi) #Extract phenoData
-rmcov.collapse.expr <- collapseRows(exprs(rmcov.lumi), getSYMBOL(featureNames(rmcov.lumi), 'lumiHumanAll.db'), rownames(rmcov.lumi)) #collapseRows by symbol
-rmcov.collapse <- ExpressionSet(assayData = rmcov.collapse.expr$datETcollapsed, phenoData = phenoData(rmcov.lumi))
-saveRDS.gz(rmcov.collapse, file = "./save/rmcov.collapse.rda")
-
-model.null <- model.matrix(~ 1, data = pData(rmcov.collapse))
-n.sv <- num.sv(exprs(rmcov.collapse), as.matrix(model.combat[,2:3]), method = "leek")
-svobj <- sva(exprs(rmcov.collapse), mod = model.combat[,2:3], mod0 = model.null, n.sv = 1)
-
-#rmsv <- removeBatchEffect(exprs(rmcov.collapse), covariates = model.matrix(~ 0 + svobj$sv), design = model.combat[,2:3])
-#rmsv.export <- rmcov.collapse
-#exprs(rmsv.export) <- rmsv
-#saveRDS.gz(rmsv.export, "./save/rmsv.export.rda")
-
-model.peer <- select(model.combat, Carrier, Patient)
-gen.peer(35, exprs(rmcov.lumi), TRUE, model.peer)
-model.PEER_covariate <- read_csv("./factor_35.csv") %>% select(-(X1:X3))
-rownames(model.PEER_covariate) <- colnames(lumi.combat)
-colnames(model.PEER_covariate) <- paste("X", 1:ncol(model.PEER_covariate), sep = "")
-peer.residual <- read_csv('./residuals_35.csv')
-
-#Plot PEER weights
-PEER.weights <- read_csv("./weight_8.csv")  #Get weights of PEER factors.  The first 6 columns are dropped because they contain the weights for the other covariates
-PEER.weights.sums <- select(PEER.weights, -(X1:X3)) %>% abs %>% colSums %>% data.frame #Get sums of weights for each factor
-PEER.weights.sums$Factor <- 1:nrow(PEER.weights.sums) #Add column to label by factor
-colnames(PEER.weights.sums)[1] <- "Weight"
-
-#ggplot of factor versus weight
-p <- ggplot(PEER.weights.sums, aes(x = factor(Factor), y = as.numeric(Weight), group = 1)) + geom_line(color = "blue") 
-p <- p + theme_bw() + xlab("Factor") + ylab("Weight")
-CairoPDF("./PEER_weights", height = 4, width = 6)
-print(p)
-dev.off()
-
-model.design <- model.matrix(~ 0 + Status, pData(rmcov.collapse)) #Make covariate matrix for limma
-colnames(model.design) %<>% str_replace("Status", "")
-model.full <- cbind(model.design, SV1 = svobj$sv) #Add PEER factors
-saveRDS.gz(model.full, file = "./save/model.full.rda")
-
-model.collinear <- data.frame(Status = factor(lumi.combat$Status), model.full.cov)
-
-age.all <- lm(as.integer(Draw.Age)/365 ~ Status, pData(lumi.rmreps.annot)) %>% anova %>% tidy
-#age.aov <- aov(Age ~ Status, pData(lumi.rmreps.annot)) %>% TukwyHSD
-sex.all <- lm(as.integer(Sex) ~ Status, pData(lumi.rmreps.annot)) %>% anova %>% tidy
-#sex.aov <- aov(Male ~ Status, pData(lumi.rmreps.annot)) %>% TukeyHSD
-batch.all <- lm(as.integer(Batch) ~ Status, pData(lumi.rmreps.annot)) %>% anova %>% tidy
-RIN.all <- lm(RIN ~ Status, pData(lumi.rmreps.annot)) %>% anova %>% tidy
-#site.all <- lm(as.integer(factor(Site)) ~ Status, pData(lumi.rmreps.annot)) %>% anova %>% tidy
-
-p <- ggplot(pData(lumi.rmreps.annot), aes(x = Status, y = as.integer(Draw.Age)/365)) + geom_boxplot()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(axis.title = element_blank()) + ggtitle(paste("Age (p < ", age.all$p.value[1], "*)", sep = ""))
-CairoPDF("./age_boxplot.pdf", height = 3, width = 3)
+p <- ggplot(pData(lumi.rmout), aes(x = Status, y = Age, fill = Status)) + geom_violin() + geom_boxplot(width = 0.1) 
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "none")
+p <- p + theme(axis.title = element_blank()) + ggtitle(paste("Age (p < ", signif(age.all$p.value[1], 3), "*)", sep = ""))
+CairoPDF("./age_boxplot.pdf", height = 6, width = 6)
 plot(p)
 dev.off()
 
-p <- ggplot(pData(lumi.rmreps.annot), aes(x = Status, y = RIN)) + geom_boxplot()
+p <- ggplot(pData(lumi.rmout), aes(x = Status, y = RIN)) + geom_boxplot(width = 0.25) + geom_violin()
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
 p <- p + theme(axis.title = element_blank()) + ggtitle(paste("RIN (p < ", round(RIN.all$p.value[1], 3), ")", sep = ""))
 CairoPDF("./rin_boxplot.pdf", height = 3, width = 3)
 plot(p)
 dev.off()
 
-p <- ggplot(pData(lumi.rmreps.annot), aes(x = Status, fill = factor(Sex))) + geom_bar()
+p <- ggplot(pData(lumi.rmout), aes(x = Status, fill = factor(Sex))) + geom_bar()
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
 p <- p + theme(axis.title = element_blank(), legend.title = element_blank()) 
 p <- p + ggtitle(paste("Sex (p < ", round(sex.all$p.value[1], 3), "*)", sep = "")) 
@@ -922,7 +353,7 @@ CairoPDF("./sex_barplot.pdf", height = 3, width = 4)
 plot(p)
 dev.off()
 
-p <- ggplot(pData(lumi.rmreps.annot), aes(x = Status, fill = factor(Batch))) + geom_bar()
+p <- ggplot(pData(lumi.rmout), aes(x = Status, fill = factor(Batch))) + geom_bar()
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
 p <- p + theme(axis.title = element_blank(), legend.position = "none") 
 p <- p + ggtitle(paste("Batch (p < ", round(batch.all$p.value[1], 3), "*)", sep = "")) 
@@ -930,275 +361,230 @@ CairoPDF("./batch_barplot.pdf", height = 3, width = 3)
 plot(p)
 dev.off()
 
-#Block correlation is being ignored for now
-block.correlation <- readRDS.gz("./save/block.correlation.rda") #Run on hoffman
-#fit.object.block <- gen.fit.block(expr.collapse$datETcollapsed, model.full, block.correlation$consensus, lumi.combat$Family)
+p <- ggplot(pData(lumi.rmout), aes(x = Status, fill = factor(Site))) + geom_bar()
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p <- p + theme(axis.title = element_blank(), legend.position = "none") 
+p <- p + ggtitle(paste("Batch (p < ", round(batch.all$p.value[1], 3), "*)", sep = "")) 
+CairoPDF("./site_barplot.pdf", height = 3, width = 3)
+plot(p)
+dev.off()
 
-#Fit limma linear model 
-#fit.object <- gen.fit(expr.collapse$datETcollapsed, model.design)
-#saveRDS.gz(fit.object, file = "./save/fit.object.rda")
+#Remove effects of covariates
+model.cov <- model.matrix(~ Sex + Age + RIN, data = pData(lumi.rmout)) #Create model matrix of covariates to be removed
 
+rmcov.expr <- removeBatchEffect(exprs(lumi.rmout), covariates = model.cov[,-1]) #Remove the effects of covariates, with the difference in diagnoses being supplied as the design argument to preserve those group differences
+rmcov.lumi <- lumi.rmout #Make a copy of lumi object
+exprs(rmcov.lumi) <- rmcov.expr #Transfer cleaned expression values into new lumi object
+SaveRDSgz(rmcov.lumi, file = "./save/rmcov.lumi.rda")
+
+#Collapse the data by symbol
+rmcov.collapse.expr <- collapseRows(exprs(rmcov.lumi), getSYMBOL(featureNames(rmcov.lumi), 'lumiHumanAll.db'), rownames(rmcov.lumi)) #collapseRows by symbol
+rmcov.collapse <- ExpressionSet(assayData = rmcov.collapse.expr$datETcollapsed, phenoData = phenoData(rmcov.lumi))
+SaveRDSgz(rmcov.collapse, file = "./save/rmcov.collapse.rda")
+
+model.design <- model.matrix(~ 0 + Status, pData(rmcov.collapse)) #Make covariate matrix for limma
+colnames(model.design) %<>% str_replace("Status", "")
+SaveRDSgz(model.design, file = "./save/model.design.rda")
+
+#Limma fit
 fit <- lmFit(rmcov.collapse, model.design)
-fit$df.residual <- (fit$df.residual - 3)
-
-fit.sva <- lmFit(rmcov.collapse, model.full)
-fit.sva$df.residual <- (fit.sva$df.residual - 3)
-
-fit.PEERremoved <- lmFit(export.collapse, model.design)
-fit.PEERremoved$df.residual <- (fit.PEERremoved$df.residual - 11)
-
-fit.PEER.cheat <- lmFit(export.collapse, model.design)
-fit.PEER.cheat$df.residual <- (fit.PEER.cheat$df.residual - 3)
+fit$df.residual <- (fit$df.residual - 5)
 
 contrasts.anova <- makeContrasts(cc = Carrier - Control, pco = Patient - Control, pca = Patient - Carrier, levels = model.design)
-fit2.anova <- contrasts.fit(fit, contrasts.anova)
-fitb <- eBayes(fit2.anova)
+fit.anova <- contrasts.fit(fit, contrasts.anova)
+fitb <- eBayes(fit.anova)
 
-#fit.ebayes <- eBayes(fit)
+#Create DE table
+#Make top tables for each coefficient
+toptable.cc <- topTable(fitb, coef = 1, n = Inf) 
+colnames(toptable.cc) %<>% str_c(".cc")
+toptable.cc$Symbol <- rownames(toptable.cc)
 
-top.object.cc <- topTable(fitb, coef = 1, n = Inf)
-top.object.pco <- topTable(fitb, coef = 2, n = Inf) 
-top.object.pca <- topTable(fitb, coef = 3, n = Inf) 
+toptable.pco <- topTable(fitb, coef = 2, n = Inf) 
+colnames(toptable.pco) %<>% str_c(".pco")
+toptable.pco$Symbol <- rownames(toptable.pco)
 
-saveRDS.gz(top.object.pco, "./save/top.object.pco.rda")
-saveRDS.gz(top.object.pca, "./save/top.object.pca.rda")
-saveRDS.gz(top.object.cc, "./save/top.object.cc.rda")
+toptable.pca <- topTable(fitb, coef = 3, n = Inf) 
+colnames(toptable.pca) %<>% str_c(".pca")
+toptable.pca$Symbol <- rownames(toptable.pca)
 
-#Calculate ratios for use in tables
-ratio.exp <- gen.ratios(exprs(rmcov.collapse), pdata)
-saveRDS.gz(ratio.exp, file = "./save/ratio.exp.rda")
-#log.ratios <- gen.group.ratios(expr.collapse$datETcollapsed, pdata)
-#saveRDS.gz(log.ratios, "./save/log.ratios.rda")
+SaveRDSgz(toptable.pco, "./save/toptable.pco.rda")
+SaveRDSgz(toptable.pca, "./save/toptable.pca.rda")
+SaveRDSgz(toptable.cc, "./save/toptable.cc.rda")
 
-#Generate statisical cutoff
-decide <- list(c("fdr", 0.01), c("fdr", 0.05), c("none", 0.001), c("none", 0.005), c("none", 0.01)) #Specify significance cutoffs
-decide.plot <- ldply(decide, gen.decide, fitb, FALSE) %>% melt(id.vars = c("Test", "Num", "Direction")) #Compute significance cutoffs
-gen.decideplot("./threshold_selection", decide.plot, width.plot = 7) #Plot different significance cutoffs
+toptable.all <- left_join(toptable.cc, toptable.pco) %>% left_join(toptable.pca)
 
-decide.final <- gen.decide(c("none", 0.001), fitb, TRUE) %>% melt(id.vars = c("Test", "Num", "Direction")) #Compute signifance cutoff p < 0.001, no FDR adjustment
-gen.decideplot("./selected_threshold", decide.final) #Plot cutoff
+#Retrieve annotation information from Ensembl
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(toptable.all$Symbol), mart = ensembl)
+bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
+colnames(bm.table) <- c("Symbol", "Definition")
 
-decide.final.fdr <- gen.decide(c("fdr", 0.05), fitb, TRUE) %>% melt(id.vars = c("Test", "Num", "Direction")) #Compute significance cutoff p < 0.1, FDR adjusted
-gen.decideplot("./selected_threshold_fdr", decide.final.fdr, 6, 4) #plot cutoff
+toptable.annot <- left_join(toptable.all, bm.table) %>% 
+    select(Symbol, Definition, dplyr::contains("logFC"), dplyr::contains("P.Value"), dplyr::contains("adj.P.Val"), dplyr::matches("t\\."), dplyr::matches("B\\."), dplyr::contains("AveExpr")) %>%
+    arrange(P.Value.pco)
 
-#Make tables
-de.object <- read_tsv("./fit_none.tsv") #Read in unadjusted fit object
-de.object.fdr <- read_tsv("./fit_fdr.tsv") #Read in adjusted fit object
-rownames(de.object) <- featureNames(rmcov.collapse)
-rownames(de.object.fdr) <- featureNames(rmcov.collapse)
-fit.selection <- gen.tables(de.object, rmcov.collapse, ratio.exp, "pLess001") #create differential expression table for unadjusted fit
-fit.selection.fdr <- gen.tables(de.object.fdr, rmcov.collapse, ratio.exp, "fdrLess05") #create differential expression table for adjusted fit
-saveRDS.gz(fit.selection, file = "./save/fit.selection.rda")
-saveRDS.gz(fit.selection.fdr, file = "./save/fit.selection.fdr.rda")
+DEWorkbook(toptable.annot, "toptable_annotated.xlsx")
 
-#P-value histogram
-gen.pval.hist("./hist_pvalue", fitb$p.value) 
+#Siggenes
+siggene.sam.cc <- limma2sam(fitb, coef = 1) 
+sam2excel(siggene.sam.cc, 0.7, "siggene.sam.cc.csv")
+siggene.sam.pco <- limma2sam(fitb, coef = 2) 
+sam2excel(siggene.sam.pco, 0.6, "siggene.sam.pco.csv")
+siggene.sam.pca <- limma2sam(fitb, coef = 3) 
+sam2excel(siggene.sam.pca, 1.1, "siggene.sam.pca.csv")
 
-#Venn diagram
-gen.venndiagram("./venn", results) 
-gen.venndiagram("./venn_fdr", results.fdr)
+siggene.ebam.cc <- limma2ebam(fitb, coef = 1) 
+ebam2excel(siggene.ebam.cc, 0.85, "siggene.ebam.cc.csv")
+siggene.ebam.pco <- limma2ebam(fitb, coef = 2, delta = 0.85) 
+ebam2excel(siggene.ebam.pco, 0.85, "siggene.ebam.pco.csv")
+siggene.ebam.pca <- limma2ebam(fitb, coef = 3, delta = 0.85) 
+ebam2excel(siggene.ebam.pca, 0.85, "siggene.ebam.pca.csv")
+
+ebam.pco.df <- read_csv("./siggene.ebam.pco.csv", skip = 15)
+ebam.pca.df <- read_csv("./siggene.ebam.pca.csv", skip = 15)
+colnames(ebam.pco.df)[5] <- "Symbol"
+colnames(ebam.pca.df)[5] <- "Symbol"
+
+#Generate statisical cutoff plot
+decide <- list(c("fdr", 0.05), c("fdr", 0.10), c("none", 0.001), c("none", 0.005), c("none", 0.01)) #Specify significance cutoffs
+decide.plot <- map_df(decide, Decide, fitb, FALSE) %>% gather(Contrast, Num.Genes, -Test, -Num, -Direction) #Compute significance cutoffs
+
+DecidePlot(decide.plot, "threshold_selection")
+decide.final <- decideTests(fitb, adjust.method = "none", p.value = 0.001) 
+decide.final.df <- data.frame(decide.final)
+decide.final.df$Symbol <- rownames(decide.final.df)
+
+#Make volcano plots
+toptable.pco$Significant <- factor(toptable.pco$Symbol %in% ebam.pco.df$Symbol)
+toptable.pca$Significant <- factor(toptable.pca$Symbol %in% ebam.pca.df$Symbol)
+
+VolcanoPlot(toptable.pco, "volcano_pco", pval.column = "P.Value.pco", log.column = "logFC.pco")
+VolcanoPlot(toptable.pca, "volcano_pca", pval.column = "P.Value.pca", log.column = "logFC.pca")
+#VolcanoPlot(toptable.cc, "volcano_cc", cutoff = 0.001, cutoff.column = "P.Value.cc", log.column = "logFC.cc")
 
 #Anova heatmaps
-clust.none <- gen.anova(fit.selection, "none")
-clust.fdr <- gen.anova(fit.selection.fdr, "fdr")
-plot.pca <- filter(fit.selection.fdr, Res.pca != 0) %>% select(matches("carr$"))
-plot.pco <- filter(fit.selection.fdr, Res.pco != 0) %>% select(matches("Pat$"))
-clust.pco <- clust.fdr[[1]]$colInd
-clust.pca <- clust.fdr[[2]]$colInd
+#Calculate ratios for use in tables
+all.controls <- exprs(rmcov.collapse[,rmcov.collapse$Status == "Control"])
+all.controls.means <- rowMeans(all.controls)
+all.carriers <- exprs(rmcov.collapse[,rmcov.collapse$Status == "Carrier"])
+all.carriers.means <- rowMeans(all.carriers)
+all.patients <- exprs(rmcov.collapse[,rmcov.collapse$Status == "Patient"])
 
-order.pca <- colnames(plot.pca)[clust.pca]
-order.pco <- colnames(plot.pco)[clust.pco]
+coef.cc <- all.carriers - all.controls.means
+coef.pco <- all.patients - all.controls.means
+coef.pca <- all.patients - all.carriers.means
 
-subset.pca <- order.pca[which(str_detect(order.pca, "CHOP_6_1")):length(order.pca)]
-subset.pco <- order.pco[which(str_detect(order.pco, "CHOP_361_1")):which(str_detect(order.pco, "CHOP_143_1"))]
-outlier.gad1 <- readRDS.gz("../outlier/outlier.gad1.rda")
-subset.all <- c(subset.pca, subset.pco, names(outlier.gad1)) %>% unique
+SaveRDSgz(coef.cc, "coef.cc.rda")
+SaveRDSgz(coef.pca, "coef.pca.rda")
+SaveRDSgz(coef.pco, "coef.pco.rda")
 
-interesting.table <- data.frame(Sample.Name = subset.all, Patient.Carrier.cluster = as.integer(subset.all %in% subset.pca), Patient.Control.cluster = as.integer(subset.all %in% subset.pco), GAD1.Outlier = as.integer(subset.all %in% names(outlier.gad1)))
-interesting.table$Sample.Name %<>% str_replace_all("_vs.*$", "")
-PIDN.match <- select(pData(rmcov.collapse), Sample.Name, PIDN)
-interesting.table %<>% join(PIDN.match) %>% select(PIDN, Sample.Name:GAD1.Outlier)
-write.xlsx(interesting.table, "interesting.table.xlsx")
+decide.pco <- filter(decide.final.df, pco != 0)$Symbol
+decide.pca <- filter(decide.final.df, pca != 0)$Symbol
+decide.cc <- filter(decide.final.df, cc != 0)$Symbol
 
-#Code for getting size of objects in memory
-objects.size <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
-names(objects.size) <- ls()
-unlist(objects.size) %>% sort
+#Adjust with ebam
+pco.plot <- coef.pco[decide.pco,]
+pca.plot <- coef.pca[decide.pca,]
+cc.plot <- coef.cc[decide.cc,]
+
+CairoPDF("anova_heatmap_patient_vs_control", width = 18, height = 18)
+heatmap.object <- heatmap.2(as.matrix(pco.plot), col = rev(redgreen(48)), breaks = c(seq(-2, -1.25, 0.25), seq(-1, 1, 0.05), seq(1.25, 2, 0.25)), trace = "none", labCol = "", labRow = "", keysize = 0.9)
+dev.off()
+
+CairoPDF("anova_heatmap_patient_vs_carrier", width = 18, height = 18)
+heatmap.object <- heatmap.2(as.matrix(pca.plot), col = rev(redgreen(48)), breaks = c(seq(-2, -1.25, 0.25), seq(-1, 1, 0.05), seq(1.25, 2, 0.25)), trace = "none", labCol = "", labRow = "", keysize = 0.9)
+dev.off()
+
+CairoPDF("anova_heatmap_carrier_vs_control", width = 18, height = 18)
+heatmap.object <- heatmap.2(as.matrix(cc.plot), col = rev(redgreen(48)), breaks = c(seq(-2, -1.25, 0.25), seq(-1, 1, 0.05), seq(1.25, 2, 0.25)), trace = "none", labCol = "", labRow = "", keysize = 0.9)
+dev.off()
+
+#P-value density plot
+fit.pvals <- data.frame(fitb$p.value)
+colnames(fit.pvals) <- c("Carrier_vs._Control", "Patient_vs._Control", "Patient_vs._Carrier")
+fit.pvals.plot <- gather(fit.pvals, Contrasts, P.Value)
+fit.pvals.plot$Contrasts %<>% str_replace_all("_", " ")
+p <- ggplot(fit.pvals.plot, aes(x = P.Value, fill = Contrasts)) + geom_density() + facet_grid(. ~ Contrasts)
+p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p <- p + theme(axis.title.y = element_blank(), legend.position = "none") 
+CairoPDF("pvalue_density", height = 4, width = 12)
+print(p)
+dev.off()
+
+#Venn Diagram - adjust with ebam
+CairoPDF("venn_diagram", width = 6, height = 6)
+vennDiagram(decide.final, include = c("up", "down"), counts.col = c("red", "green"), show.include = "FALSE")
+dev.off()
+
+#Gene boxplots
+GeneBoxplot(rmcov.collapse, "SERPINE2")
+
+#Patient vs. Control P-value Up
+GeneBoxplot(rmcov.collapse, "NLRP12")
+GeneBoxplot(rmcov.collapse, "NUP214")
+
+#Patient vs. Control P-value Down
+GeneBoxplot(rmcov.collapse, "CD27")
+GeneBoxplot(rmcov.collapse, "SKAP1")
+
+#Patient vs. Control Fold Change Up
+GeneBoxplot(rmcov.collapse, "MMP9")
+GeneBoxplot(rmcov.collapse, "ABCA1")
+
+#Patient vs. Control Fold Change Down
+GeneBoxplot(rmcov.collapse, "CD8A")
 
 #Submit genes to Enrichr
 source('../../code/GO/enrichr.R')
-enrichr.nofdr <- select(fit.selection, Symbol, Res.cc, Res.pco, Res.pca)
-enrichr.fdr <- select(fit.selection.fdr, Symbol, Res.cc, Res.pco, Res.pca)
+enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "Reactome_2016") 
 
-enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "WikiPathways_2016", "Reactome_2016", "BioCarta_2016", "PPI_Hub_Proteins", "Humancyc_2016", "NCI-Nature_2016", "Panther_2016") 
+EnrichrSubmit(ebam.pco.df, enrichr.terms, "pco")
+EnrichrSubmit(ebam.pca.df, enrichr.terms, "pca")
 
-comparison.cols <- names(enrichr.nofdr[-c(1:2)])
-trap1 <- map(comparison.cols, enrichr.submit, enrichr.fdr, enrichr.terms, "fdr")
-trap2 <- map(comparison.cols, enrichr.submit, enrichr.nofdr, enrichr.terms, "nofdr")
-
-#gobiol.test <- trap1[[1]]$Reactome_2016
-#gobiol.sig <- filter(gobiol.test, P.value < 0.05)
-
-get.kappa <- function(term.current, all.terms)
-{
-    map(all.terms, cbind, term.current) %>% map(kappa2) %>% map_dbl(getElement, "value")
-}
-
-get.kappa.cluster <- function(enrichr.output, gene.names, filename)
-{
-    num.genes <- length(gene.names)
-    enrichr.list <- map(enrichr.output$Genes, str_split, ",") %>% map(getElement, 1) 
-    enrichr.match <- map(enrichr.list, is.element, el = toupper(gene.names)) %>% reduce(rbind) %>% t
-    rownames(enrichr.match) <- toupper(gene.names)
-    colnames(enrichr.match) <- enrichr.output$Term
-    enrichr.match.df <- data.frame(enrichr.match)
-
-    enrichr.kappa <- map(enrichr.match.df, get.kappa, enrichr.match.df) %>% reduce(rbind)
-    enrichr.kappa[enrichr.kappa < 0] <- 0
-
-    rownames(enrichr.kappa) <- colnames(enrichr.kappa) <- enrichr.output$Term
-
-    CairoPDF(str_c(filename, "heatmap", sep = "."), width = 30, height = 30)
-    heatmap.plus(enrichr.kappa, col = heat.colors(40), symm = TRUE, margins = c(20,20))
-    dev.off()
-
-    kappa.dist <- dist(enrichr.kappa, method = "manhattan")
-    kappa.clust <- hclust(kappa.dist, method = "average")
-
-    CairoPDF(str_c(filename, "clust", sep = "."), height = 30, width = 30)
-    plot(kappa.clust)
-    dev.off()
-
-    kappa.modules <- cutreeDynamic(kappa.clust, minClusterSize = 2, method = "tree")
-    kappa.modules.TOM <- cutreeDynamic(kappa.clust, distM = TOMdist(enrichr.kappa), minClusterSize = 2, method = "hybrid")
-    kappa.modules.df <- data.frame(Term = rownames(enrichr.kappa), Module = kappa.modules, Module.TOM = kappa.modules.TOM)
-
-    enrichr.output$Module <- kappa.modules
-    enrichr.output$Module.TOM <- kappa.modules.TOM
-    enrichr.output %<>% select(Index:Combined.Score, Module:Module.TOM, Genes)
-    
-    wb <- createWorkbook()
-    addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
-    writeDataTable(wb = wb, sheet = 1, x = enrichr.output, withFilter = TRUE)
-    freezePane(wb, 1, firstRow = TRUE)
-    modifyBaseFont(wb, fontSize = 10.5, fontName = "Oxygen")
-    setColWidths(wb, 1, cols = c(1, 3:ncol(enrichr.output)), widths = "auto")
-    setColWidths(wb, 1, cols = 2, widths = 45)
-    
-    saveWorkbook(wb, str_c(filename, "table.xlsx", sep = "."), overwrite = TRUE) 
-}
-
-pco.only <- filter(fit.selection.fdr, Res.pco != 0)
-pca.only <- filter(fit.selection.fdr, Res.pca != 0)
-
-pca.gobiol.file <- "./enrichr/fdr/pca/enrichr/GO_Biological_Process_2015.xlsx" 
+pca.gobiol.file <- "./enrichr/pca/GO_Biological_Process_2015.xlsx" 
 pca.gobiol <- read.xlsx(pca.gobiol.file) 
-pca.gobiol$Num.Genes <- map(pca.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-pca.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
-get.kappa.cluster(pca.gobiol, pca.only$Symbol, file_path_sans_ext(pca.gobiol.file))
+pca.gobiol.filter <- FilterEnrichr(pca.gobiol, 0.01, pca.gobiol.file, TRUE, ebam.pca.df)
 pca.gobiol$Database <- "GO Biological Process"
-pca.gobiol.final <- slice(pca.gobiol, c(1, 33, 48, 62, 107))
-#others: 86, 48, 
 
-pca.gomole.file <- "./enrichr/fdr/pca/enrichr/GO_Molecular_Function_2015.xlsx"
+pca.gomole.file <- "./enrichr/pca/GO_Molecular_Function_2015.xlsx"
 pca.gomole <- read.xlsx(pca.gomole.file) 
-pca.gomole$Num.Genes <- map(pca.gomole$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-pca.gomole %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
-get.kappa.cluster(pca.gomole, pca.only$Symbol, file_path_sans_ext(pca.gomole.file))
-pca.gomole$Database <- "GO Molecular Process"
-pca.gomole.final <- slice(pca.gomole, c(1, 18, 29))
+pca.gomole.filter <- FilterEnrichr(pca.gomole, 0.05, pca.gobiol.file, TRUE, ebam.pca.df)
+pca.gomole$Database <- "GO Molecular Function"
 
-pca.reactome.file <- "./enrichr/fdr/pca/enrichr/Reactome_2016.xlsx"
+pca.reactome.file <- "./enrichr/pca/Reactome_2016.xlsx"
 pca.reactome <- read.xlsx(pca.reactome.file) 
-pca.reactome$Num.Genes <- map(pca.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-pca.reactome %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
-get.kappa.cluster(pca.reactome, pca.only$Symbol, file_path_sans_ext(pca.reactome.file))
+pca.reactome.filter <- FilterEnrichr(pca.reactome, 0.05, pca.reactome.file, TRUE, ebam.pca.df)
 pca.reactome$Database <- "Reactome"
 
-pca.reactome.final <- slice(pca.reactome, c(1, 11))
+pca.kegg.file <- "./enrichr/pca/KEGG_2016.xlsx"
+pca.kegg <- read.xlsx(pca.kegg.file) 
+pca.kegg.filter <- FilterEnrichr(pca.kegg, 0.05, pca.kegg.file, TRUE, ebam.pca.df)
+pca.kegg$Database <- "KEGG"
 
-pca.panther <- read.xlsx('./enrichr/fdr/pca/enrichr/Panther_2016.xlsx') %>% slice(c(5, 6))
-pca.panther$Num.Genes <- map(pca.panther$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-pca.panther$Database <- "Panther"
+pca.gobiol.final <- slice(pca.gobiol, c(1, 24, 62))
+pca.gomole.final <- slice(pca.gomole, c(1, 3))
+pca.reactome.final <- slice(pca.reactome, c(4, 6))
 
-pca.enrichr <- rbind(pca.gobiol.final, pca.gomole.final, pca.reactome.final, pca.panther)
-#get.kappa.cluster(pca.enrichr, pca.only$Symbol, "./enrichr/fdr/pca/enrichr/combined")
+pca.enrichr <- rbind(pca.gobiol.final, pca.gomole.final, pca.reactome.final)
+pca.enrichr$Adj.P.value <- p.adjust(pca.enrichr$P.value, method = "fdr")
+EnrichrPlot(pca.enrichr, ebam.pca.df, "pca.enrichr")
 
-fdr.pca <- select(enrichr.fdr, Symbol, Res.pca) 
-gen.enrichrplot(pca.enrichr, fdr.pca, "pca.enrichr")
-
-pco.gobiol.file <- "./enrichr/fdr/pco/enrichr/GO_Biological_Process_2015.xlsx"
+#Patient vs. Control
+pco.gobiol.file <- "./enrichr/pco/GO_Biological_Process_2015.xlsx"
 pco.gobiol <- read.xlsx(pco.gobiol.file) 
-pco.gobiol$Num.Genes <- map(pco.gobiol$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-pco.gobiol %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.01)
-get.kappa.cluster(pco.gobiol, pco.only$Symbol, file_path_sans_ext(pco.gobiol.file))
+pco.gobiol.filter <- FilterEnrichr(pco.gobiol, 0.05, pco.gobiol.file, TRUE, ebam.pco.df)
 pco.gobiol$Database <- "GO Biological Process"
-pco.gobiol.final <- slice(pco.gobiol, c(6, 7, 8, 13))
 
-pco.gomole.file <- "./enrichr/fdr/pco/enrichr/GO_Molecular_Function_2015.xlsx"
+pco.gomole.file <- "./enrichr/pco/GO_Molecular_Function_2015.xlsx"
 pco.gomole <- read.xlsx(pco.gomole.file) 
-pco.gomole$Num.Genes <- map(pco.gomole$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-pco.gomole %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
-#get.kappa.cluster(pco.gomole, pco.only$Symbol, file_path_sans_ext(pco.gomole.file))
-pco.gomole$Database <- "GO Molecular Process"
-pco.gomole.final <- slice(pco.gomole, c(4, 8, 12))
+pco.gomole.filter <- FilterEnrichr(pco.gomole, 0.05, pco.gomole.file)
+pco.gomole$Database <- "GO Molecular Function"
 
-pco.reactome.file <- "./enrichr/fdr/pco/enrichr/Reactome_2016.xlsx"
-pco.reactome <- read.xlsx(pco.reactome.file) 
-pco.reactome$Num.Genes <- map(pco.reactome$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-pco.reactome %<>% filter(Num.Genes > 4) %>% filter(P.value < 0.05)
-get.kappa.cluster(pco.reactome, pco.only$Symbol, file_path_sans_ext(pco.reactome.file))
-pco.reactome$Database <- "Reactome"
-pco.reactome.final <- slice(pco.reactome, c(5, 15, 26))
+pco.gobiol.final <- slice(pco.gobiol, c(18, 7, 42))
+pco.gomole.final <- slice(pco.gomole, 9)
 
-pco.panther <- read.xlsx("./enrichr/fdr/pco/enrichr/Panther_2016.xlsx") %>% slice(1)
-pco.panther$Num.Genes <- map(pco.panther$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-pco.panther$Database <- "Reactome"
-pco.enrichr <- rbind(pco.gobiol.final, pco.gomole.final, pco.panther, pco.reactome.final)
+pco.enrichr <- rbind(pco.gobiol.final, pco.gomole.final)
+pco.enrichr$Adj.P.value <- p.adjust(pco.enrichr$P.value, method = "fdr")
+EnrichrPlot(pco.enrichr, ebam.pco.df, "pco.enrichr") 
 
-fdr.pco <- select(enrichr.fdr, Symbol, Res.pco) 
-gen.enrichrplot(pco.enrichr, fdr.pco, "pco.enrichr") 
-
-cc.gobiol <- read.xlsx("./enrichr/nofdr/carrier_vs_control/enrichr/GO_Biological_Process.xlsx") %>% select(Term, P.value, Genes) %>% slice(c(1,2))
-cc.gobiol$Database <- "GO Biological Process"
-cc.kegg <- read.xlsx("./enrichr/nofdr/carrier_vs_control/enrichr/KEGG_2016.xlsx") %>% select(Term, P.value, Genes) %>% slice(c(1))
-cc.kegg$Database <- "KEGG"
-cc.reactome <- read.xlsx("./enrichr/nofdr/carrier_vs_control/enrichr/Reactome_2016.xlsx") %>% select(Term, P.value, Genes) %>% slice(c(1))
-cc.reactome$Database <- "Reactome"
-cc.enrichr <- rbind(cc.gobiol, cc.kegg, cc.reactome)
-
-nofdr.cc <- select(enrichr.fdr, Symbol, Res.time1.carrier_vs_time1.control) 
-gen.enrichrplot(cc.enrichr, nofdr.cc, "cc.enrichr") 
-
-#gobiol.sig$Num.Genes <- map_int(temp.list, length)
-#temp.overlap <- map(temp.list, get.overlap, temp.list) %>% reduce(rbind)
-#colnames(temp.overlap) <- gobiol.sig$Term
-#rownames(temp.overlap) <- gobiol.sig$Term
-#diag(test.kappa) <- 1
-
-#genes <- temp.list[[1]]
-#num.genes <- num.temp
-#genes.list <- temp.list
-
-#get.overlap <- function(genes, genes.list, num.genes)
-#{
-    #overlap.vector <- map(genes.list, intersect, genes) %>% map_int(length)
-    #complement.vector <- map_int(genes.list, length) - overlap.vector
-    #complement.num <- length(genes) - overlap.vector
-    #length.vector <- map(genes.list, union, genes) %>% map_int(length)
-    #total.vector <- num.genes - length.vector
-    #one.star <- overlap.vector + complement.vector
-    #star.one <- overlap.vector + complement.num
-    #zero.star <- complement.num + total.vector
-    #star.zero <- complement.vector + total.vector
-    #total.ab <- one.star + zero.star
-    #o.ab <- (overlap.vector + total.vector) / total.ab
-    #a.ab <- ((one.star * star.one) + (zero.star + star.one)) / (total.ab^2)
-    #k.ab <- (o.ab - a.ab) / (1 - a.ab)
-    #return(k.ab)
-#}
-
-##PCA Analysis of differentially expressed genes
-#res.cols <- str_subset(colnames(fit.selection), "Res")
-#mds.none <- lapply(res.cols, subset.pca, fit.selection, export.lumi,  "none")
-#mds.fdr <- lapply(res.cols, subset.pca, fit.selection.fdr, export.lumi, "fdr")

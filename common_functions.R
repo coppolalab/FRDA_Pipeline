@@ -2,75 +2,30 @@ library(irr)
 library(tools)
 library(heatmap.plus)
 library(WGCNA)
-library(reshape2)
+library(igraph)
+library(TeachingDemos)
+#library(reshape2)
 enableWGCNAThreads()
 
-gen.cor <- function(dataset, trait.df)
-{
-    dataset %<>% mutate(Sample.Name = rownames(dataset))
-    module.trait.cor <- bicor(select(dataset, -Sample.Name), select(trait.df, -Sample.Name), maxPOutliers = 0.05)
-    module.trait.cor.pval <- corPvalueStudent(module.trait.cor, nrow(dataset))
-    colnames(module.trait.cor.pval) %<>% paste(".p.value", sep = "") 
-    return(cbind(module.trait.cor, module.trait.cor.pval))
-}
-
-gen.text.heatmap <- function(cor.dataset, text.matrix, x.names, y.names, maintitle, filename, zlim.plot = c(-1,1))
-{
-    width.dynamic <- 3 + (1 * ncol(text.matrix))
-    CairoPDF(filename, width = width.dynamic, height = 10)
-    par(mar = c(8, 8, 3, 3))
-    labeledHeatmap(Matrix = cor.dataset, xLabels = x.names, yLabels = y.names, ySymbols = y.names, yColorLabels = TRUE, colors = greenWhiteRed(50), textMatrix = text.matrix, setStdMargins = F, cex.text = 0.5, zlim = zlim.plot, main = maintitle)
-    dev.off()
-}
-
-#IAC detection of outliers vix 
-gen.IACcluster <- function(filename, dataset, maintitle)
-{
-    IAC = cor(dataset, use = "p")
-    cluster1 = hclust(as.dist(1 - IAC))
-    CairoPDF(filename, family = "Oxygen-Sans", width = 13, height = 10)
-    plot(cluster1, main = paste(maintitle, " (no = ", dim(IAC)[2], ")"))
-    dev.off()
-    return(IAC)
-}
-
-#Create plot of standard deviations of all interarray correlations.  
-gen.sdplot <- function(filename, dataset, maintitle)
-{ meanIAC <- apply(dataset, 2, mean)
-    sdCorr <- sd(meanIAC)
-    numbersd <- (meanIAC - mean(meanIAC)) / sdCorr
-    numbersd.plot <- data.frame("Sample.Status" = names(numbersd), "Sample.Num" = seq(1:length(numbersd)), "Z.score" = numbersd)
-
-    p <- ggplot(numbersd.plot, aes(x = Sample.Num, y = Z.score, label = Sample.Status) )
-    p <- p + geom_text(size = 4, colour = "red")
-    p <- p + geom_hline(aes(yintercept = -2)) + geom_hline(yintercept = -3) 
-    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-    p <- p + xlab("Sample Number") + ylab("Z score") + ggtitle(maintitle)
-    CairoPDF(filename, family = "Oxygen-Regular", width = 10, height = 10)
-    print(p)
-    dev.off()
-    return(numbersd)
-}
-
-saveRDS.gz <- function(object,file,threads=parallel::detectCores()) {
+SaveRDSgz <- function(object,file,threads=parallel::detectCores()) {
   con <- pipe(paste0("pigz -p",threads," > ",file),"wb")
   saveRDS(object, file = con)
   close(con)
 }
 
-readRDS.gz <- function(file,threads=parallel::detectCores()) {
+ReadRDSgz <- function(file,threads=parallel::detectCores()) {
   con <- pipe(paste0("pigz -d -c -p",threads," ",file))
   object <- readRDS(file = con)
   close(con)
   return(object)
 }
 
-get.kappa <- function(term.current, all.terms)
+GetKappa <- function(term.current, all.terms)
 {
     map(all.terms, cbind, term.current) %>% map(kappa2) %>% map_dbl(getElement, "value")
 }
 
-get.kappa.cluster <- function(enrichr.output, gene.names, filename)
+GetKappaCluster <- function(enrichr.output, gene.names, filename)
 {
     num.genes <- length(gene.names)
     enrichr.list <- map(enrichr.output$Genes, str_split, ",") %>% map(getElement, 1) 
@@ -79,7 +34,7 @@ get.kappa.cluster <- function(enrichr.output, gene.names, filename)
     colnames(enrichr.match) <- enrichr.output$Term
     enrichr.match.df <- data.frame(enrichr.match)
 
-    enrichr.kappa <- map(enrichr.match.df, get.kappa, enrichr.match.df) %>% reduce(rbind)
+    enrichr.kappa <- map(enrichr.match.df, GetKappa, enrichr.match.df) %>% reduce(rbind)
     enrichr.kappa[enrichr.kappa < 0] <- 0
 
     rownames(enrichr.kappa) <- colnames(enrichr.kappa) <- enrichr.output$Term
@@ -114,19 +69,90 @@ get.kappa.cluster <- function(enrichr.output, gene.names, filename)
     saveWorkbook(wb, str_c(filename, "table.xlsx", sep = "."), overwrite = TRUE) 
 }
 
-gen.enrichrplot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8)
-{
-    enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
-    enrichr.df$Log.pvalue <- -(log10(enrichr.df$P.value))
-    enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% str_replace_all("\\_.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
-    enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
-    enrichr.df %<>% arrange(Log.pvalue)
-    enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
-    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
+#gen.enrichrplot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8)
+#{
+    #enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map_int(Compose(unlist, length))
+    #enrichr.df$Log.pvalue <- -(log10(enrichr.df$P.value))
+    #enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% str_replace_all("\\_.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
+    #enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
+    #enrichr.df %<>% arrange(Log.pvalue)
+    #enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
+    #enrichr.df.plot <- select(enrichr.df, Format.Name, Log.pvalue) %>% melt(id.vars = "Format.Name") 
 
-    p <- ggplot(enrichr.df.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = enrichr.df$Format.Name, hjust = "left", aes(y = 0.1)) + coord_flip() + theme_bw() + theme(legend.position = "none")
-    p <- p + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-    CairoPDF(filename, height = plot.height, width = plot.width)
-    print(p)
+    #p <- ggplot(enrichr.df.plot, aes(Format.Name, value, fill = variable)) + geom_bar(stat = "identity") + geom_text(label = enrichr.df$Format.Name, hjust = "left", aes(y = 0.1)) + coord_flip() + theme_bw() + theme(legend.position = "none")
+    #p <- p + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
+    #CairoPDF(filename, height = plot.height, width = plot.width)
+    #print(p)
+    #dev.off()
+#}
+
+GetPPI <- function(gene.list)
+{
+    ppi.id <- filter(iw.hugo, is.element(HUGO, gene.list))$IW.ID
+    ppi.inweb.interactors <- filter(inweb.ppi, is.element(Interactor.A, ppi.id)) %>% filter(is.element(Interactor.B, ppi.id))
+    ppi.inweb.symbols <- merge(ppi.inweb.interactors, iw.hugo, by.x = "Interactor.A", by.y = "IW.ID") %>% merge(iw.hugo, by.x = "Interactor.B", by.y = "IW.ID")
+    ppi.inweb.final <- select(ppi.inweb.symbols, contains("HUGO"))
+    colnames(ppi.inweb.final) <- c("Symbol.A", "Symbol.B")
+
+    ppi.biogrid <- filter(biogrid.ppi.reduce, Official.Symbol.Interactor.A %in% gene.list) %>% filter(Official.Symbol.Interactor.B %in% gene.list)
+    colnames(ppi.biogrid) <- c("Symbol.A", "Symbol.B")
+
+    ppi.combined <- rbind(ppi.inweb.final, ppi.biogrid)
+    ppi.combined$unique <- str_c(ppi.combined$Symbol.A, ppi.combined$Symbol.B, sep = ".")
+    ppi.unique <- filter(ppi.combined, !duplicated(unique)) %>% select(-unique)
+    ppi.self <- apply(ppi.unique, 1, reduce, identical)
+    ppi.unique.final <- filter(ppi.unique, !ppi.self)
+    return(ppi.unique.final)
+}
+
+#PPI Plot
+PlotPPI <- function(adjacency.expr, gene.list, ppi.edges, filename, prune = FALSE, clust.keep = 1, plot.width = 7, plot.height = 7)
+{
+    expr.adjacency <- adjacency.expr[gene.list,gene.list]
+    ppi.adjacency <- matrix(0, ncol = ncol(expr.adjacency), nrow = nrow(expr.adjacency), dimnames = list(rownames(expr.adjacency), colnames(expr.adjacency)))
+    ppi.adjacency[as.matrix(ppi.edges)] <- 1
+    final.adjacency <- expr.adjacency * ppi.adjacency
+    final.mins <- apply(final.adjacency, 2, min)
+    final.maxs <- apply(final.adjacency, 2, max)
+    final.scaled <- scale(final.adjacency, center = final.mins, scale = final.maxs - final.mins)
+    final.scaled[is.nan(final.scaled)] <- 0
+
+    final.igraph <- graph_from_adjacency_matrix(expr.adjacency, mode = "undirected", weighted = TRUE, diag = FALSE)
+    ppi.igraph <- graph_from_adjacency_matrix(final.scaled, mode = "undirected", weighted = TRUE, diag = FALSE)
+
+    if (prune == TRUE)
+    {
+        #num.edges <- map(1:vcount(ppi.igraph), incident, graph = ppi.igraph) %>% map_dbl(length)
+
+        final.igraph <- delete.vertices(final.igraph, which(clusters(ppi.igraph)$membership != clust.keep))
+        ppi.igraph <- delete.vertices(ppi.igraph, which(clusters(ppi.igraph)$membership != clust.keep))
+    }
+
+    #ppi.colors <- rainbow(length(unique(clusters(ppi.igraph)$membership)))
+    #final.colors <- ppi.colors[clusters(ppi.igraph)$membership]
+
+    final.edges <- attr(E(final.igraph), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+    final.df <- data.frame(Edges = final.edges, Weight = edge_attr(final.igraph, "weight"))
+    if (sum(final.scaled) > 0)
+    {
+        ppi.edges <- attr(E(ppi.igraph), "vnames") %>% str_split("\\|") %>% map(sort) %>% reduce(rbind) %>% apply(1, paste, collapse = "_")
+        ppi.df <- data.frame(Edges = ppi.edges, Weight = edge_attr(ppi.igraph, "weight"))
+
+        final.filter <- is.element(final.df$Edges, ppi.df$Edges)
+        final.df[final.filter,]$Weight <- ppi.df$Weight 
+        final.df[!final.filter,]$Weight <- 0
+        final.df$Color <- "#dddddd99"
+        final.df[final.filter,]$Color <- "#0000FF99"
+    }
+    else
+    {
+        final.df <- list(Color = "#0000FF99", Weight = 0)
+    }
+
+    CairoPDF(filename, width = plot.width, height = plot.height)
+    par(mar=c(0,0,0,0) + 0.5)
+    plot.igraph(final.igraph, layout = layout_nicely(final.igraph), vertex.size = 35, vertex.label.degree = pi/2, vertex.label.font = 2, vertex.label.color = "black", edge.color = final.df$Color, edge.width = 5*final.df$Weight)
     dev.off()
+
+    return(ppi.igraph)
 }
