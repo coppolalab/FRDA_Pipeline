@@ -10,6 +10,8 @@ library(sva)
 library(broom)
 library(WGCNA)
 library(tools)
+library(BayesFactor)
+library(EBarrays)
 
 #String operations
 library(stringr)
@@ -34,7 +36,7 @@ library(magrittr)
 library(purrr)
 library(rlist)
 
-#Boxplot function - must fix
+#Boxplot function
 BoxPlot <- function(filename, lumi.object, colorscheme, maintext, ylabtext) {
     expr.df <- exprs(lumi.object) %>% t %>% data.frame
     dataset.addvars <- mutate(expr.df, Sample.Status = sampleNames(lumi.object), Batch = lumi.object$Batch)
@@ -138,14 +140,23 @@ DecidePlot <- function(decide.plot, filename, width.plot = 6, height.plot = 7) {
 }
 
 #Volcano plot
-VolcanoPlot <- function(top.table, filename, pval.column = "P.Value", log.column = "logFC", xlabel = "Log Fold Change", ylabel = "Log.Pvalue")
-{
+VolcanoPlot <- function(top.table, filename, pval.column = "P.Value", log.column = "logFC", xlabel = "Log Fold Change", ylabel = "Log.Pvalue") {
     top.table$Log.Pvalue <- -log10(top.table[[pval.column]])
     p <- ggplot(top.table, aes_string(x = log.column, y = "Log.Pvalue")) + geom_point(aes(color = Significant))
     p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-    p <- p + theme(legend.position = "none")
+    p <- p + theme(legend.position = "none", plot.background = element_blank())
     p <- p + xlab(xlabel) + ylab(ylabel)
-    CairoPNG(str_c(filename, ".png"), width = 300, height = 300)
+    CairoPDF(filename, bg = "transparent")
+    print(p)
+    dev.off()
+}
+
+BayesPlot <- function(siggene, filename, threshold, log.column = "logFC", xlabel = "Log Fold Change", ylabel = "Posterior Probability") {
+    p <- ggplot(siggene, aes_string(x = log.column, y = "Posterior")) + geom_point(aes(color = Significant))
+    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    p <- p + theme(legend.position = "none", plot.background = element_blank())
+    p <- p + xlab(xlabel) + ylab(ylabel)
+    CairoPDF(filename, width = 4, height = 4, bg = "transparent")
     print(p)
     dev.off()
 }
@@ -155,26 +166,16 @@ GeneBoxplot <- function(lumi.object, gene.symbol) {
     gene.df <- data.frame(Status = lumi.object$Status, Expression = gene.expr)
     gene.df$Status %<>% factor(levels = c("Control", "Carrier", "Patient"))
 
-    p <- ggplot(gene.df, aes(x = Status, y = Expression, fill = Status)) + geom_violin() + geom_boxplot(width = 0.1) + theme_bw()
+    p <- ggplot(gene.df, aes(x = Status, y = Expression, fill = Status)) + geom_violin() + geom_boxplot(width = 0.1, outlier.shape = NA) + theme_bw()
     p <- p + theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-    CairoPDF(str_c(gene.symbol, ".pdf"), width = 6, height = 6)
+    p <- p + ggtitle(gene.symbol) + theme(plot.background = element_blank(), panel.border = element_rect(color = "black", size = 1))
+    p <- p + theme(axis.title.x = element_blank(), axis.ticks.x = element_blank())
+    CairoPDF(str_c(gene.symbol, ".pdf"), width = 4, height = 4, bg = "transparent")
     print(p)
     dev.off()
 }
 
 #GO functions
-EnrichrSubmit <- function(dataset, enrichr.terms, colname) {
-    dir.create(file.path("./enrichr", colname), showWarnings = FALSE)
-    enrichr.data <- map(enrichr.terms, GetEnrichrData, dataset, FALSE)
-    enrichr.names <- enrichr.terms[!is.na(enrichr.data)]
-    enrichr.data <- enrichr.data[!is.na(enrichr.data)]
-
-    names(enrichr.data) <- enrichr.names
-
-    map(names(enrichr.data), EnrichrWorkbook, enrichr.data, colname)
-    enrichr.data
-}
-
 EnrichrWorkbook <- function(database, full.df, colname) {
     dataset <- full.df[[database]]
 
@@ -182,49 +183,48 @@ EnrichrWorkbook <- function(database, full.df, colname) {
     addWorksheet(wb = wb, sheetName = "sheet 1", gridLines = TRUE)
     writeDataTable(wb = wb, sheet = 1, x = dataset, withFilter = TRUE)
     freezePane(wb, 1, firstRow = TRUE)
-    setColWidths(wb, 1, cols = c(1, 3:ncol(dataset)), widths = "auto")
-    setColWidths(wb, 1, cols = 2, widths = 45)
+    setColWidths(wb, 1, cols = 1, widths = 45)
+    setColWidths(wb, 1, cols = c(2:ncol(dataset)), widths = "auto")
     
     dir.create(file.path("./enrichr", colname), recursive = TRUE)
     filename = str_c(file.path("./enrichr", colname, database), ".xlsx")
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-EnrichrPlot <- function(enrichr.df, enrichr.expr, filename, plot.height = 5, plot.width = 8) {
+EnrichrPlot <- function(enrichr.df, enrichr.expr, filename, plot.height = 5, plot.width = 8, opposite = FALSE) {
     enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map(unlist) %>% map_int(length)
-    enrichr.df$Log.pvalue <- -(log10(enrichr.df$Adj.P.value))
-    enrichr.updown <- map(enrichr.df$Genes, UpDown, enrichr.expr) %>% reduce(rbind)
+    enrichr.df$Log.Bayes.Factor <- log10(enrichr.df$Bayes.Factor)
+    enrichr.updown <- map(enrichr.df$Genes, UpDown, enrichr.expr, opposite) %>% reduce(rbind)
     colnames(enrichr.updown) <- c("Up", "Down")
     enrichr.df <- cbind(enrichr.df, enrichr.updown)
-    enrichr.df$Log.Up <- enrichr.df$Log.pvalue * enrichr.df$Up / enrichr.df$Gene.Count
-    enrichr.df$Log.Down <- enrichr.df$Log.pvalue * enrichr.df$Down / enrichr.df$Gene.Count
+    enrichr.df$Log.Up <- enrichr.df$Log.Bayes.Factor * enrichr.df$Up / enrichr.df$Gene.Count
+    enrichr.df$Log.Down <- enrichr.df$Log.Bayes.Factor * enrichr.df$Down / enrichr.df$Gene.Count
     enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
     enrichr.df$Format.Name <- paste(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")", sep = "")
-    enrichr.df %<>% arrange(Log.pvalue)
+    enrichr.df %<>% arrange(Log.Bayes.Factor)
     enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
     enrichr.df.plot <- select(enrichr.df, Format.Name, Log.Up, Log.Down) %>% gather(Direction, Length, -Format.Name) 
 
-    p <- ggplot(enrichr.df.plot, aes(Format.Name, Length, fill = Direction)) + geom_bar(stat = "identity") + geom_text(label = c(as.character(enrichr.df$Format.Name), rep("", nrow(enrichr.df))), hjust = "left", aes(y = 0.1)) + scale_fill_discrete(name = "Direction", labels = c("Up", "Down"))
-    p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste('-', Log[10], ' P-value')))
-    CairoPDF(filename, height = plot.height, width = plot.width)
+    p <- ggplot(enrichr.df.plot, aes(Format.Name, Length, fill = Direction)) 
+    p <- p + geom_bar(stat = "identity", color = "black", size = 1) 
+    #p <- p + geom_text(label = c(as.character(enrichr.df$Format.Name), rep("", nrow(enrichr.df))), hjust = "left", aes(y = 0.1)) 
+    p <- p + scale_fill_discrete(name = "Direction", labels = c("Up", "Down")) 
+    p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste(Log[10], ' Bayes Factor')))
+    p <- p + theme(plot.background = element_blank(), legend.background = element_blank(), axis.text.y = element_text(size = 12), panel.border = element_rect(color = "black", size = 1))
+    CairoPDF(filename, height = plot.height, width = plot.width, bg = "transparent")
     print(p)
     dev.off()
 }
 
-UpDown <- function(filter.vector, enrichr.df) {
+UpDown <- function(filter.vector, enrichr.df, opposite = FALSE) {
     split.vector <- str_split(filter.vector, ",")[[1]]
     enrichr.filter <- filter(enrichr.df, is.element(Symbol, split.vector))
-    enrichr.vector <- c("Up" = length(which(sign(enrichr.filter$z.value) == 1)), "Down" = length(which(sign(enrichr.filter$z.value) == -1)))
-    enrichr.vector
-}
-
-FilterEnrichr <- function(enrichr.table, p.value, filename, cluster = FALSE, ebam.df = data.frame()) {
-    enrichr.table$Num.Genes <- map(enrichr.table$Genes, str_split, ",") %>% map(getElement, 1) %>% map_int(length)
-    enrichr.table %<>% filter(Num.Genes > 4) %>% filter(P.value < p.value)
-    if(cluster == TRUE) {
-        GetKappaCluster(enrichr.table, ebam.df$Symbol, file_path_sans_ext(filename))
+    if (opposite == FALSE) {
+        enrichr.vector <- c("Up" = length(which(sign(enrichr.filter$Z.score) == 1)), "Down" = length(which(sign(enrichr.filter$Z.score) == -1)))
+    } else {
+        enrichr.vector <- c("Up" = length(which(sign(enrichr.filter$Z.score) == -1)), "Down" = length(which(sign(enrichr.filter$Z.score) == 1)))
     }
-    enrichr.table
+    enrichr.vector
 }
 
 #Code for getting size of objects in memory
@@ -426,25 +426,49 @@ toptable.annot <- left_join(toptable.all, bm.table) %>%
 
 DEWorkbook(toptable.annot, "toptable_annotated.xlsx")
 
+#pattern1 <- rep(1, ncol(rmcov.collapse)) %>% str_c(collapse = ",")
+#pattern2 <- as.integer(rmcov.collapse$Status) %>% str_c(collapse = ",")
+#pattern.pco <- str_replace_all(pattern2, "2", "0") 
+#pattern.pco.null <- str_replace_all(pattern.pco, "3", "1") 
+
+#ebarrays.pattern <- ebPatterns(c(pattern.pco, pattern.pco.null))
+#ebarrays.gg <- emfit(exprs(rmcov.collapse), family = "GG", hypotheses = ebarrays.pattern)
+#ebarrays.lnn <- emfit(exprs(rmcov.collapse), family = "LNN", hypotheses = ebarrays.pattern)
+
+#lnn.post <- postprob(ebarrays.lnn, exprs(rmcov.collapse))
+#lnn.pattern <- data.frame(lnn.post$pattern)
+#lnn.pattern$Symbol <- rownames(lnn.pattern)
+#lnn.threshold <- crit.fun(lnn.pattern$X1, 0.05)
+#lnn.diff <- filter(lnn.pattern, X2 > lnn.threshold)
+
+#gg.post <- postprob(ebarrays.gg, exprs(rmcov.collapse))
+#gg.pattern <- data.frame(gg.post$pattern)
+#gg.pattern$Symbol <- rownames(gg.pattern)
+#gg.threshold <- crit.fun(gg.pattern$X1, 0.05)
+#gg.diff <- filter(gg.pattern, X2 > gg.threshold)
+
 #Siggenes
-siggene.sam.cc <- limma2sam(fitb, coef = 1) 
-sam2excel(siggene.sam.cc, 0.7, "siggene.sam.cc.csv")
-siggene.sam.pco <- limma2sam(fitb, coef = 2) 
-sam2excel(siggene.sam.pco, 0.6, "siggene.sam.pco.csv")
-siggene.sam.pca <- limma2sam(fitb, coef = 3) 
-sam2excel(siggene.sam.pca, 1.1, "siggene.sam.pca.csv")
-
 siggene.ebam.cc <- limma2ebam(fitb, coef = 1) 
-ebam2excel(siggene.ebam.cc, 0.85, "siggene.ebam.cc.csv")
-siggene.ebam.pco <- limma2ebam(fitb, coef = 2, delta = 0.85) 
-ebam2excel(siggene.ebam.pco, 0.85, "siggene.ebam.pco.csv")
-siggene.ebam.pca <- limma2ebam(fitb, coef = 3, delta = 0.85) 
-ebam2excel(siggene.ebam.pca, 0.85, "siggene.ebam.pca.csv")
+ebam2excel(siggene.ebam.cc, 0.9, "siggene.ebam.cc.csv")
+siggene.ebam.pco <- limma2ebam(fitb, coef = 2) 
+ebam2excel(siggene.ebam.pco, 0.9, "siggene.ebam.pco.csv")
+siggene.ebam.pca <- limma2ebam(fitb, coef = 3) 
+ebam2excel(siggene.ebam.pca, 0.9, "siggene.ebam.pca.csv")
 
-ebam.pco.df <- read_csv("./siggene.ebam.pco.csv", skip = 15)
-ebam.pca.df <- read_csv("./siggene.ebam.pca.csv", skip = 15)
-colnames(ebam.pco.df)[5] <- "Symbol"
-colnames(ebam.pca.df)[5] <- "Symbol"
+a0.all <- find.a0(rmcov.collapse, as.integer(rmcov.collapse$Status), B = 1000)
+ebam.all <- ebam(a0.all)
+ebam.all.df <- data.frame(Z.score = ebam.all@z, Posterior = ebam.all@posterior)
+ebam.all.df$Significant <- ebam.all.df$Posterior > 0.9
+ebam.all.df$Symbol <- rownames(ebam.all.df)
+
+GetBF <- function(gene.vector, model.design) {
+    final.df <- mutate(model.design, Gene = gene.vector)
+    bf.all <- anovaBF(Gene ~ Status, final.df)
+    bf.all
+}
+bf.all <- apply(exprs(rmcov.collapse), 1, GetBF, data.frame(Status = rmcov.collapse$Status))
+bf.extract <- map(bf.all, extractBF) %>% map_dbl(extract2, "bf")
+bf.df <- data.frame(Symbol = featureNames(rmcov.collapse), Bayes.Factor = bf.extract) %>% arrange(desc(Bayes.Factor))
 
 #Generate statisical cutoff plot
 decide <- list(c("fdr", 0.05), c("fdr", 0.10), c("none", 0.001), c("none", 0.005), c("none", 0.01)) #Specify significance cutoffs
@@ -456,12 +480,35 @@ decide.final.df <- data.frame(decide.final)
 decide.final.df$Symbol <- rownames(decide.final.df)
 
 #Make volcano plots
-toptable.pco$Significant <- factor(toptable.pco$Symbol %in% ebam.pco.df$Symbol)
-toptable.pca$Significant <- factor(toptable.pca$Symbol %in% ebam.pca.df$Symbol)
-
-VolcanoPlot(toptable.pco, "volcano_pco", pval.column = "P.Value.pco", log.column = "logFC.pco")
-VolcanoPlot(toptable.pca, "volcano_pca", pval.column = "P.Value.pca", log.column = "logFC.pca")
+#toptable.pco$Significant <- factor(toptable.pco$Symbol %in% ebam.pco.df$Symbol)
+#toptable.pca$Significant <- factor(toptable.pca$Symbol %in% ebam.pca.df$Symbol)
+#VolcanoPlot(toptable.pco, "volcano_pco", pval.column = "P.Value.pco", log.column = "logFC.pco")
+#VolcanoPlot(toptable.pca, "volcano_pca", pval.column = "P.Value.pca", log.column = "logFC.pca")
 #VolcanoPlot(toptable.cc, "volcano_cc", cutoff = 0.001, cutoff.column = "P.Value.cc", log.column = "logFC.cc")
+
+ebam.pca.df <- data.frame(Z.score = siggene.ebam.pca@z, Posterior = siggene.ebam.pca@posterior)
+ebam.pca.df$Significant <- ebam.pca.df$Posterior > 0.9
+ebam.pca.df$Symbol <- rownames(ebam.pca.df)
+SaveRDSgz(ebam.pca.df, "ebam.pca.df.rda")
+ebam.pca.merge <- left_join(toptable.pca, ebam.pca.df)
+write.xlsx(ebam.pca.merge, "ebam.pca.xlsx")
+
+ebam.pco.df <- data.frame(Z.score = siggene.ebam.pco@z, Posterior = siggene.ebam.pco@posterior)
+ebam.pco.df$Significant <- ebam.pco.df$Posterior > 0.9
+ebam.pco.df$Symbol <- rownames(ebam.pco.df)
+SaveRDSgz(ebam.pco.df, "ebam.pco.df.rda")
+ebam.pco.merge <- left_join(toptable.pco, ebam.pco.df)
+write.xlsx(ebam.pco.merge, "ebam.pco.xlsx")
+
+ebam.cc.df <- data.frame(Z.score = siggene.ebam.cc@z, Posterior = siggene.ebam.cc@posterior)
+ebam.cc.df$Significant <- ebam.cc.df$Posterior > 0.9
+ebam.cc.df$Symbol <- rownames(ebam.cc.df)
+SaveRDSgz(ebam.cc.df, "ebam.cc.df.rda")
+ebam.cc.merge <- left_join(toptable.cc, ebam.cc.df)
+write.xlsx(ebam.cc.merge, "ebam.cc.xlsx")
+
+BayesPlot(ebam.pco.merge, "ebam_pco", 0.9, log.column = "logFC.pco")
+BayesPlot(ebam.pca.merge, "ebam_pca", 0.9, log.column = "logFC.pca")
 
 #Anova heatmaps
 #Calculate ratios for use in tables
@@ -517,74 +564,108 @@ CairoPDF("venn_diagram", width = 6, height = 6)
 vennDiagram(decide.final, include = c("up", "down"), counts.col = c("red", "green"), show.include = "FALSE")
 dev.off()
 
-#Gene boxplots
+#Patient vs. Control Posterior
+GeneBoxplot(rmcov.collapse, "ABCA1")
+GeneBoxplot(rmcov.collapse, "MARC1")
+GeneBoxplot(rmcov.collapse, "CD27")
 GeneBoxplot(rmcov.collapse, "SERPINE2")
 
-#Patient vs. Control P-value Up
-GeneBoxplot(rmcov.collapse, "NLRP12")
+#Patient vs. Carrier Posterior
+GeneBoxplot(rmcov.collapse, "NOV")
+GeneBoxplot(rmcov.collapse, "CORO1C")
+GeneBoxplot(rmcov.collapse, "LBH")
+GeneBoxplot(rmcov.collapse, "RALGDS")
+
+#Shared Posterior
+GeneBoxplot(rmcov.collapse, "MARC1")
 GeneBoxplot(rmcov.collapse, "NUP214")
 
-#Patient vs. Control P-value Down
-GeneBoxplot(rmcov.collapse, "CD27")
-GeneBoxplot(rmcov.collapse, "SKAP1")
-
-#Patient vs. Control Fold Change Up
+#Shared Log Fold
 GeneBoxplot(rmcov.collapse, "MMP9")
-GeneBoxplot(rmcov.collapse, "ABCA1")
-
-#Patient vs. Control Fold Change Down
-GeneBoxplot(rmcov.collapse, "CD8A")
+GeneBoxplot(rmcov.collapse, "ANPEP")
 
 #Submit genes to Enrichr
 source('../../code/GO/enrichr.R')
-enrichr.terms <- c("GO_Biological_Process_2015", "GO_Molecular_Function_2015", "KEGG_2016", "Reactome_2016") 
+enrichr.terms <- c("GO Biological Process", "GO Molecular Function", "GO Cellular Component", "KEGG", "Reactome") 
 
-EnrichrSubmit(ebam.pco.df, enrichr.terms, "pco")
-EnrichrSubmit(ebam.pca.df, enrichr.terms, "pca")
+#pca.sig <- filter(gene.df, Significant == TRUE)$Symbol %>% toupper
+pca.ebam <- read.xlsx("../classification/ebam.pca.xlsx") 
+pca.sig <- filter(pca.ebam, Posterior > 0.9)$Symbol
+pca.enrichr <- map(enrichr.terms, GetHyper, pca.sig, pca.ebam$Symbol)
+names(pca.enrichr) <- enrichr.terms
+map(enrichr.terms, EnrichrWorkbook, pca.enrichr, "pca")
 
-pca.gobiol.file <- "./enrichr/pca/GO_Biological_Process_2015.xlsx" 
+pca.gobiol.file <- "./enrichr/pca/GO Biological Process.xlsx" 
 pca.gobiol <- read.xlsx(pca.gobiol.file) 
-pca.gobiol.filter <- FilterEnrichr(pca.gobiol, 0.01, pca.gobiol.file, TRUE, ebam.pca.df)
+GetKappaCluster(file_path_sans_ext(pca.gobiol.file), pca.enrichr[["GO Biological Process"]], pca.ebam$Symbol)
 pca.gobiol$Database <- "GO Biological Process"
 
-pca.gomole.file <- "./enrichr/pca/GO_Molecular_Function_2015.xlsx"
+pca.gomole.file <- "./enrichr/pca/GO Molecular Function.xlsx"
 pca.gomole <- read.xlsx(pca.gomole.file) 
-pca.gomole.filter <- FilterEnrichr(pca.gomole, 0.05, pca.gobiol.file, TRUE, ebam.pca.df)
 pca.gomole$Database <- "GO Molecular Function"
 
-pca.reactome.file <- "./enrichr/pca/Reactome_2016.xlsx"
+pca.reactome.file <- "./enrichr/pca/Reactome.xlsx"
 pca.reactome <- read.xlsx(pca.reactome.file) 
-pca.reactome.filter <- FilterEnrichr(pca.reactome, 0.05, pca.reactome.file, TRUE, ebam.pca.df)
+GetKappaCluster(file_path_sans_ext(pca.reactome.file), pca.enrichr[["Reactome"]], pca.ebam$Symbol)
 pca.reactome$Database <- "Reactome"
 
-pca.kegg.file <- "./enrichr/pca/KEGG_2016.xlsx"
+pca.kegg.file <- "./enrichr/pca/KEGG.xlsx"
 pca.kegg <- read.xlsx(pca.kegg.file) 
-pca.kegg.filter <- FilterEnrichr(pca.kegg, 0.05, pca.kegg.file, TRUE, ebam.pca.df)
 pca.kegg$Database <- "KEGG"
 
-pca.gobiol.final <- slice(pca.gobiol, c(1, 24, 62))
-pca.gomole.final <- slice(pca.gomole, c(1, 3))
-pca.reactome.final <- slice(pca.reactome, c(4, 6))
+pca.gobiol.final <- slice(pca.gobiol, c(104, 8, 46, 58, 82))
+pca.gomole.final <- slice(pca.gomole, 1)
+pca.kegg.final <- slice(pca.kegg, 9)
+pca.reactome.final <- slice(pca.reactome, 7)
 
-pca.enrichr <- rbind(pca.gobiol.final, pca.gomole.final, pca.reactome.final)
-pca.enrichr$Adj.P.value <- p.adjust(pca.enrichr$P.value, method = "fdr")
-EnrichrPlot(pca.enrichr, ebam.pca.df, "pca.enrichr")
+pca.enrichr <- rbind(pca.gobiol.final, pca.gomole.final, pca.kegg.final, pca.reactome.final)
+EnrichrPlot(pca.enrichr, pca.ebam, "pca.enrichr", plot.height = 4, plot.width = 10, opposite = TRUE)
 
 #Patient vs. Control
-pco.gobiol.file <- "./enrichr/pco/GO_Biological_Process_2015.xlsx"
+pco.ebam <- read.xlsx("../classification/ebam.pco.xlsx") 
+pco.sig <- filter(pco.ebam, Posterior > 0.9)$Symbol
+pco.enrichr <- map(enrichr.terms, GetHyper, pco.sig, pco.ebam$Symbol)
+names(pco.enrichr) <- enrichr.terms
+map(enrichr.terms, EnrichrWorkbook, pco.enrichr, "pco")
+
+pco.gobiol.file <- "./enrichr/pco/GO Biological Process.xlsx"
 pco.gobiol <- read.xlsx(pco.gobiol.file) 
-pco.gobiol.filter <- FilterEnrichr(pco.gobiol, 0.05, pco.gobiol.file, TRUE, ebam.pco.df)
+GetKappaCluster(file_path_sans_ext(pco.gobiol.file), pco.enrichr[["GO Biological Process"]], pco.ebam$Symbol)
 pco.gobiol$Database <- "GO Biological Process"
 
-pco.gomole.file <- "./enrichr/pco/GO_Molecular_Function_2015.xlsx"
+pco.gomole.file <- "./enrichr/pco/GO Molecular Function.xlsx"
 pco.gomole <- read.xlsx(pco.gomole.file) 
-pco.gomole.filter <- FilterEnrichr(pco.gomole, 0.05, pco.gomole.file)
 pco.gomole$Database <- "GO Molecular Function"
 
-pco.gobiol.final <- slice(pco.gobiol, c(18, 7, 42))
-pco.gomole.final <- slice(pco.gomole, 9)
+pco.reactome.file <- "./enrichr/pco/Reactome.xlsx"
+pco.reactome <- read.xlsx(pco.reactome.file) 
+pco.reactome$Database <- "GO Molecular Function"
 
-pco.enrichr <- rbind(pco.gobiol.final, pco.gomole.final)
-pco.enrichr$Adj.P.value <- p.adjust(pco.enrichr$P.value, method = "fdr")
-EnrichrPlot(pco.enrichr, ebam.pco.df, "pco.enrichr") 
+pco.gobiol.final <- slice(pco.gobiol, c(1, 2, 3, 48))
+pco.gomole.final <- slice(pco.gomole, 2)
+pco.reactome.final <- slice(pco.reactome, 2)
 
+pco.enrichr <- rbind(pco.gobiol.final, pco.gomole.final, pco.reactome.final)
+EnrichrPlot(pco.enrichr, pco.ebam, "pco.enrichr", plot.height = 4, plot.width = 10, opposite = TRUE)  
+
+#Pheno table
+pdata.final <- pData(rmcov.collapse)[,-ncol(pData(rmcov.collapse))] 
+pdata.age <- group_by(pdata.final, Status) %>% summarise(Age = mean(Age)) 
+status.all <- as.matrix(table(pdata.final$Status))
+status.male <- filter(pdata.final, Sex == "MALE") %>% group_by(Status) %>% summarise(Male = n())
+status.female <- filter(pdata.final, Sex == "FEMALE") %>% group_by(Status) %>% summarise(Female = n())
+table.csv <- data.frame(Group = c("Carrier", "Control", "Patient", "Total"), Total = c(status.all, sum(status.all)), Male = c(status.male$Male, sum(status.male$Male)), Female = c(status.female$Female, sum(status.female$Female)), Age = c(round(pdata.age$Age, 2), round(mean(pdata.age$Age), 2)))
+
+write_csv(table.csv, "../../FRDA poster/subjects.csv")
+
+#Temp table
+pca.join <- pca.ebam
+colnames(pca.join)[1:2] <- str_c(colnames(pca.join)[1:2], ".pca")
+pca.join %<>% left_join(toptable.pca) 
+
+pco.join <- pco.ebam
+colnames(pco.join)[1:2] <- str_c(colnames(pco.join)[1:2], ".pco")
+pco.join %<>% left_join(toptable.pco) 
+
+temp.join <- left_join(pca.join, pco.join) %>% left_join(bm.table) %>% select(Symbol, Definition, dplyr::contains("Z.score"), dplyr::contains("Posterior"), dplyr::contains("logFC"))
+write.xlsx(temp.join, "temp.join.xlsx")

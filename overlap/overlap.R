@@ -2,6 +2,8 @@
 library(lumi)
 library(WGCNA) #for fastcor
 library(RRHO)
+library(BayesFactor)
+library(siggenes)
 
 #Data arrangement
 library(plyr) #only for revalue
@@ -11,7 +13,7 @@ library(tidyr)
 #Functional programming
 library(magrittr)
 library(purrr)
-library(vadr)
+#library(vadr)
 
 #String operations
 library(stringr)
@@ -29,7 +31,9 @@ source("../common_functions.R")
 GetRRHO <- function(colname1, colname2, dataset1, dataset2, symbolname, stepsize = 50) {
     subset1 <- select_(dataset1, symbolname, str_c(colname1, ".Log.Pvalue"))
     subset2 <- select_(dataset2, symbolname, str_c(colname2, ".Log.Pvalue"))
-    rrho.out <- RRHO(subset1, subset2, alternative = "enrichment", stepsize = stepsize, BY = TRUE)
+    rrho.dir <- str_c("./rrho/", colname1, "_", colname2)
+    dir.create(rrho.dir, showWarnings = FALSE)
+    rrho.out <- RRHO(subset1, subset2, alternative = "enrichment", stepsize = stepsize, plots = TRUE, labels = c(colname1, colname2), outputdir = rrho.dir, BY = TRUE)
     return(rrho.out)
 }
 
@@ -39,26 +43,33 @@ mouse.only <- filter(mouse.homology, NCBI.Taxon.ID == 10090)
 human.only <- filter(mouse.homology, NCBI.Taxon.ID == 9606)
 
 #Read in differential expression data
-human.groups <- c("cc", "pca", "pco")
-pco.human.genes <- ReadRDSgz("../baseline_lumi/save/toptable.pco.rda")
-colnames(pco.human.genes) <- str_c("pco", colnames(pco.human.genes), sep = ".")
-pco.human.genes$pco.Log.Pvalue <- (-log10(pco.human.genes$pco.P.Value) * sign(pco.human.genes$pco.logFC))
+human.groups <- c("pca", "pco")
+#pco.human.genes <- ReadRDSgz("../baseline_lumi/save/toptable.pco.rda")
+#colnames(pco.human.genes) <- str_c("pco", colnames(pco.human.genes), sep = ".")
+#pco.human.genes$pco.Log.Pvalue <- (-log10(pco.human.genes$pco.P.Value) * sign(pco.human.genes$pco.logFC))
 
-pca.human.genes <- ReadRDSgz("../baseline_lumi/save/toptable.pca.rda")
-colnames(pca.human.genes) <- str_c("pca", colnames(pca.human.genes), sep = ".")
-pca.human.genes$pca.Log.Pvalue <- (-log10(pca.human.genes$pca.P.Value) * sign(pca.human.genes$pca.logFC))
+#pca.human.genes <- ReadRDSgz("../baseline_lumi/save/toptable.pca.rda")
+#colnames(pca.human.genes) <- str_c("pca", colnames(pca.human.genes), sep = ".")
+#pca.human.genes$pca.Log.Pvalue <- (-log10(pca.human.genes$pca.P.Value) * sign(pca.human.genes$pca.logFC))
 
-cc.human.genes <- ReadRDSgz("../baseline_lumi/save/toptable.cc.rda")
-colnames(cc.human.genes) <- str_c("cc", colnames(cc.human.genes), sep = ".")
-cc.human.genes$cc.Log.Pvalue <- (-log10(cc.human.genes$cc.P.Value) * sign(cc.human.genes$cc.logFC))
+#cc.human.genes <- ReadRDSgz("../baseline_lumi/save/toptable.cc.rda")
+#colnames(cc.human.genes) <- str_c("cc", colnames(cc.human.genes), sep = ".")
+#cc.human.genes$cc.Log.Pvalue <- (-log10(cc.human.genes$cc.P.Value) * sign(cc.human.genes$cc.logFC))
 
-#Only keep genes found in HomoloGene
-all.human.genes <- cbind(pca.human.genes, pco.human.genes, cc.human.genes)
+#Read in EBAM
+ebam.pca.df <- ReadRDSgz("../baseline_lumi/ebam.pca.df.rda") %>% select(Z.score, Posterior)
+ebam.pca.df$Sign.Posterior <- sign(ebam.pca.df$Z.score) * ebam.pca.df$Posterior
+colnames(ebam.pca.df) %<>% str_c(".pca")
+ebam.pco.df <- ReadRDSgz("../baseline_lumi/ebam.pco.df.rda") %>% select(Z.score, Posterior)
+ebam.pco.df$Sign.Posterior <- sign(ebam.pco.df$Z.score) * ebam.pco.df$Posterior
+colnames(ebam.pco.df) %<>% str_c(".pco")
+
+all.human.genes <- cbind(ebam.pca.df, ebam.pco.df)
 all.human.genes$Symbol <- rownames(all.human.genes)
 
-all.human.reduce <- select(all.human.genes, Symbol, dplyr::contains("Log.Pvalue"))
-human.filtered <- filter(all.human.reduce, Symbol %in% human.only$Symbol)
-human.homology <- left_join(human.filtered, human.only)
+all.human.reduce <- select(all.human.genes, Symbol, dplyr::contains("Sign.Posterior"))
+#human.filtered <- filter(all.human.reduce, Symbol %in% human.only$Symbol)
+#human.homology <- left_join(human.filtered, human.only)
 
 #Read in GAA expansion data
 gaa.genes <- read.xlsx("../../FRDA project/WGCNA_GAA/gaa.cor.xlsx")
@@ -167,6 +178,14 @@ kikog.rrho.pval <- c(kikohg.rrho.pval, kikomg.rrho.pval, kikolg.rrho.pval)
 #kiki!
 
 #PBMC study
+model.pbmc <- ReadRDSgz("../../pbmc/save/model.pbmc.rda")
+pbmc.collapse <- ReadRDSgz("../../pbmc/save/pbmc.collapse.rda")
+
+#Only keep genes shared between DE and PBMC data
+pbmc.overlap <- intersect(all.human.reduce$Symbol, pbmc.collapse)
+human.pbmc <- filter(all.human.reduce, Symbol %in% pbmc.overlap)
+pbmc.human <- filter(pbmc.reduce, Symbol %in% pbmc.overlap)
+
 #Read in PBMC data
 pbmc.groups <- str_c(c("pca", "pco", "cc"), "pbmc", sep = ".")
 pco.pbmc.genes <- ReadRDSgz("../../pbmc/save/top.object.pco.rda")
@@ -185,11 +204,6 @@ all.pbmc.genes <- cbind(pca.pbmc.genes, pco.pbmc.genes, cc.pbmc.genes)
 all.pbmc.genes$Symbol <- rownames(all.pbmc.genes)
 
 pbmc.reduce <- select(all.pbmc.genes, Symbol, dplyr::contains("Log.Pvalue"))
-
-#Only keep genes shared between DE and PBMC data
-pbmc.overlap <- intersect(all.human.reduce$Symbol, pbmc.reduce$Symbol)
-human.pbmc <- filter(all.human.reduce, Symbol %in% pbmc.overlap)
-pbmc.human <- filter(pbmc.reduce, Symbol %in% pbmc.overlap)
 
 #Compute RRHO between DE and PBMC data
 pbmch.rrho <- map(pbmc.groups, mkchain( map(human.groups, GetRRHO, .,  human.pbmc, pbmc.human, "Symbol"))) %>% flatten
@@ -237,8 +251,19 @@ ipsc.gaa <- filter(ipsc.reduce, Symbol %in% ipsc.overlap)
 
 #Compute RRHO between GAA and IPSC data
 ipscg.rrho <- GetRRHO("gaa", "ipsc", gaa.ipsc, ipsc.gaa, "Symbol")
+subset1 <- select(gaa.ipsc, Symbol, gaa.Log.Pvalue)
+subset2 <- select(ipsc.gaa, Symbol, ipsc.Log.Pvalue)
+#Must have outputdir, labels and plots = TRUE
+rrho.out <- RRHO(subset1, subset2, alternative = "enrichment", stepsize = 50, plots = TRUE, labels = c("gaa", "ipsc"), outputdir = "./gaa_ipsc", BY = TRUE)
 ipscg.rrho.logpval <- na.omit(ipscg.rrho$hypermat.by) %>% max
 ipscg.rrho.pval <- exp(-ipscg.rrho.logpval)
+
+gaa.ipsc.sort <- arrange(gaa.ipsc, desc(gaa.Log.Pvalue))
+gaa.ipsc.sort$Index <- 1:nrow(gaa.ipsc.sort)
+write.xlsx(gaa.ipsc.sort, "./gaa.ipsc.xlsx")
+ipsc.gaa.sort <- arrange(ipsc.gaa, desc(ipsc.Log.Pvalue))
+ipsc.gaa.sort$Index <- 1:nrow(ipsc.gaa.sort)
+write.xlsx(ipsc.gaa.sort, "./ipsc.gaa.xlsx")
 
 #Van Houten
 #Read in Van Houten data
@@ -292,7 +317,7 @@ quantile.range <- quantile(pval.adjust.plot$P.value, probs = seq(0, 1, 0.05))
 color.palette <- colorRampPalette(c("#FFFFFF", "#df8640"))(length(quantile.range) - 1)
 pval.adjust.plot$P.value.quantile <- findInterval(pval.adjust.plot$P.value, quantile.range, all.inside = TRUE)
 
-CairoPDF("overlap.heatmap", width = 11, height = 6)
+CairoPDF("overlap.heatmap", width = 8, height = 4, bg = "transparent")
 p <- ggplot(pval.adjust.plot, aes(Data.Comparison, Human.Comparison, label = P.value, fill = factor(P.value.quantile))) + geom_raster() + geom_text() + theme_bw()
 p <- p + theme(axis.title.x = element_blank(), axis.title.y = element_blank())
 p <- p + theme(axis.ticks.x = element_blank(), axis.ticks.y = element_blank())

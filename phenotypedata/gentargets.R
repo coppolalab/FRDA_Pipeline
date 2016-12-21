@@ -12,63 +12,52 @@ library(reshape2)
 library(rlist)
 
 #Find sample ranges which skip
-find.skips <- function(data.vector)
-{
-    if (sum(data.vector) != length(data.vector))
-    {
+find.skips <- function(data.vector) {
+    if (sum(data.vector) != length(data.vector)) {
         return(TRUE)
     }
-    else
-    {
+    else {
         return(FALSE)
     }
 }
 
 #Find samples ranges which do not start at 1
-find.baseline <- function(data.vector)
-{
-    if (min(data.vector) > 1)
-    {
+find.baseline <- function(data.vector) {
+    if (min(data.vector) > 1) {
         return(TRUE)
     }
-    else
-    {
+    else {
         return(FALSE)
     }
 }
 
 #Phenotype data
-my_select <- function(trained)
-{
+my_select <- function(trained) {
     n_fmts <- nchar(gsub("[^%]", "", names(trained))) + grepl("%y", names(trained))*1.5
     names(trained[ which.max(n_fmts) ])
 }
 
-get.families <- function(row.vector)
-{
+get.families <- function(row.vector) {
     raw.string <- c(row.vector["PIDN"], row.vector["Children"], row.vector["Parents"] , row.vector["Sibling"], row.vector["Nephew.Niece"], row.vector["Grandchild"])
     raw.string <- raw.string[!is.na(raw.string)]
     raw.string %<>% str_replace_all(" ", "") %>% sort
     final.string <- lapply(raw.string, str_split, ",") %>% unlist
 }
 
-add.regex <- function(string.vector, one.PIDN)
-{
+add.regex <- function(string.vector, one.PIDN) {
     regex.vector <- paste("^", string.vector, sep = "") %>% paste("$", sep = "") 
     regex.key <- paste(regex.vector, collapse = "|")
     PIDN.index <- str_detect(one.PIDN, regex.key) %>% which
     return(PIDN.index)
 }
 
-get.blocks <- function(PIDN, multiple.melt)
-{
+get.blocks <- function(PIDN, multiple.melt) {
     PIDN.regex <- paste("^", PIDN, "$", sep = "")
     PIDN.df <- filter(multiple.melt, grepl(PIDN.regex, value))
     return(PIDN.df$L1)
 }
 
-join.dups <- function(dup.vector, multiple.melt)
-{
+join.dups <- function(dup.vector, multiple.melt) {
     regex.vector <- paste("^", dup.vector, sep = "") %>% paste("$", sep = "") %>% paste(collapse = "|")
     dup.df <- filter(multiple.melt, grepl(regex.vector, L1))
     final.PIDNs <- unique(dup.df$value) %>% as.character %>% sort
@@ -192,6 +181,7 @@ targets.final[reps.conditions,]$RIN <- filter(targets.final, grepl(reps.names, S
 targets.final[reps.conditions,]$RNA.ID <- filter(targets.final, grepl(reps.names, Sample.Name) & Sample.Num != "1r")$RNA.ID
 
 #Add other pheno data
+subjects.all$Sex %<>% tolower %>% capitalize
 targets.final <- left_join(targets.final, subjects.all)
 targets.final$Sample.Num %<>% factor
 targets.final$Batch %<>% factor
@@ -226,6 +216,11 @@ write.xlsx(duped, "duped.xlsx")
 
 dates.duped <- filter(targets.dates.all, is.element(Combined, duped.filter)) %>% arrange(PIDN, Sample.Num)
 
+temp.known <- filter(subjects.all, Status != "Unknown" & Status != "UNKNOWN")
+temp.table <- table(temp.known$Status, temp.known$Sex)
+temp.pcts <- sweep(temp.table, 1, rowSums(temp.table), "/")
+
+STOP
 #targets.dates.out <- filter(targets.final, Site == "CHOP") %>% select(Sample.Name, PIDN, Sample.Num, Date.Drawn)
 #write.xlsx(targets.dates.out, "targets.dates.out.xlsx")
 

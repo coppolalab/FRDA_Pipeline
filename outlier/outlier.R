@@ -53,7 +53,7 @@ Workbook <- function(dataset, filename) {
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-OutlierPlot <- function(gene.symbol, import.lumi, direction, num.sd = 3) {
+OutlierPlot <- function(gene.symbol, import.lumi, direction, ecdf.fun, num.sd = 3) {
     gene.expr <- import.lumi[match(gene.symbol, featureNames(import.lumi)),]
     gene.plot <- data.frame(Sample.Name = import.lumi$Sample.Name, Status = import.lumi$Status, Expression = as.vector(exprs(gene.expr)))
     gene.plot$Status %<>% factor(levels = c("Patient", "Carrier", "Control"))
@@ -69,13 +69,15 @@ OutlierPlot <- function(gene.symbol, import.lumi, direction, num.sd = 3) {
         intercept.value <- mean(gene.plot$Expression) - (sd(gene.plot$Expression) * num.sd)
     }
 
+    quantile.value <- ecdf.fun(mean(gene.plot$Expression)) %>% signif(2)
+
     p <- ggplot(gene.plot, aes(Sample.Name, Expression, col = Status)) + geom_point() + theme_bw()
     p <- p + theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.ticks.x = element_blank()) 
     p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
     p <- p + geom_hline(yintercept = mean(gene.plot$Expression), col = "black", size = 2)
     p <- p + geom_hline(yintercept = intercept.value, col = "darkorange", alpha = 0.5, size = 2)
-    p <- p + ggtitle(gene.symbol)
-    CairoPDF(gene.symbol, width = 10, height = 6)
+    p <- p + ggtitle(str_c(gene.symbol, " (", quantile.value*100, "% quantile)"))
+    CairoPDF(gene.symbol, width = 7, height = 4)
     print(p)
     dev.off()
 }
@@ -91,8 +93,9 @@ normalized.4 <- Threshold(normalized, pData(import.lumi), 4)
 normalized.5 <- Threshold(normalized, pData(import.lumi), 5)
 saveRDS.gz(normalized, file = "./save/normalized.rda")
 
-OutlierPlot("RPS2", import.lumi, "below")
-OutlierPlot("TRAPPC3", import.lumi, "below")
-OutlierPlot("STON1", import.lumi, "above")
-OutlierPlot("GUCY1B3", import.lumi, "above")
+ecdf.data <- ecdf(means)
+OutlierPlot("RPS2", import.lumi, "below", ecdf.data)
+OutlierPlot("TRAPPC3", import.lumi, "below", ecdf.data)
+OutlierPlot("STON1", import.lumi, "above", ecdf.data)
+OutlierPlot("GUCY1B3", import.lumi, "above", ecdf.data)
 
