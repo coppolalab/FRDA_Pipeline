@@ -36,6 +36,7 @@ library(purrr)
 
 #Data arrangement
 library(dplyr)
+library(plyr)
 library(tidyr)
 library(broom)
 library(UpSetR)
@@ -126,14 +127,14 @@ CorrelationWorkbook <- function(de.table, filename) {
 }
 
 BayesWorkbook <- function(de.table, filename) { 
-    pval.cols <- colnames(de.table) %>% str_detect("Posterior") %>% which
-    cor.cols <- colnames(de.table) %>% str_detect("Coefficient") %>% which
+    pval.cols <- colnames(de.table) %>% str_detect("Bayes.Factor") %>% which
+    cor.cols <- colnames(de.table) %>% str_detect("Median") %>% which
 
     wb <- createWorkbook()
     addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
     writeDataTable(wb = wb, sheet = 1, x = de.table)
     sig.pvalues <- createStyle(fontColour = "red")
-    conditionalFormatting(wb, 1, cols = pval.cols, rows = 1:nrow(de.table), rule = ">0.9", style = sig.pvalues)
+    conditionalFormatting(wb, 1, cols = pval.cols, rows = 1:nrow(de.table), rule = ">3", style = sig.pvalues)
     conditionalFormatting(wb, 1, cols = cor.cols, rows = 1:nrow(de.table), style = c("#63BE7B", "white", "red"), type = "colourScale")
     setColWidths(wb, 1, cols = 1, widths = "auto")
     setColWidths(wb, 1, cols = 2, widths = 45)
@@ -286,7 +287,7 @@ EnrichrWorkbook <- function(database, full.df, colname) {
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-EnrichrPlot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8) {
+EnrichrPlot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8, maintitle = "auto") {
     enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map(unlist) %>% map_int(length)
     enrichr.df$Log.Bayes.Factor <- log10(enrichr.df$Bayes.Factor)
     enrichr.df$Term %<>% str_replace_all("\\ \\(GO.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% str_replace_all(",.*$", "")  #Remove any thing after the left parenthesis and convert to all lower case
@@ -297,7 +298,12 @@ EnrichrPlot <- function(enrichr.df, filename, plot.height = 5, plot.width = 8) {
 
     p <- ggplot(enrichr.df.plot, aes(Format.Name, Log.Bayes.Factor)) + geom_bar(stat = "identity", fill = "brown") + coord_flip() + theme_bw() + theme(legend.position = "none") 
     p <- p + theme(axis.title.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste(Log[10], ' Bayes Factor')))
-    p <- p + theme(panel.border = element_rect(color = "black", size = 1), plot.background = element_blank()) + ggtitle(str_c(capitalize(filename), " Module"))
+    p <- p + theme(panel.border = element_rect(color = "black", size = 1), plot.background = element_blank(), plot.title = element_text(hjust = 0.5))  
+    if (maintitle == "auto"){
+        p <- p + ggtitle(str_c(capitalize(filename), " Module"))
+    } else {
+        p <- p + ggtitle(maintitle)
+    }
     CairoPDF(str_c(filename, ".enrichr"), height = plot.height, width = plot.width, bg = "transparent")
     print(p)
     dev.off()
@@ -436,47 +442,69 @@ SaveRDSgz(model.design, file = "./save/model.design.rda")
 #SaveRDSgz(skew.filter, "./save/skew.filter.rda")
 
 ##BF test
-#bf.gaa <- apply(expr.collapse, 1, GetBF, data.frame(model.design))
-#SaveRDSgz(bf.gaa, "./save/bf.gaa.rda")
-#bf.extract <- map(bf.gaa, extractBF) %>% map_dbl(extract2, "bf")
-#bf.df <- data.frame(Symbol = featureNames(export.lumi), Bayes.Factor = bf.extract) %>% arrange(desc(Bayes.Factor))
-#bf.sig <- filter(bf.df, Bayes.Factor > 3)$Symbol
-#bf.posterior <- map(bf.gaa, posterior, iterations = 10000)
-#SaveRDSgz(bf.posterior, "./save/bf.posterior.rda")
-#bf.quantile <- map(bf.posterior, magrittr::extract, TRUE, 1) %>% map(quantile, c(0.025, 0.975)) %>% reduce(rbind) %>% set_colnames(c("CI_2.5", "CI_97.5")) %>% data.frame
-#bf.quantile$Median <- map(bf.posterior, magrittr::extract, TRUE, 1) %>% map_dbl(median)
-#bf.quantile$Symbol <- featureNames(export.lumi)
-#bf.posterior.df <- left_join(bf.df, bf.quantile)
-#write.xlsx(bf.posterior.df, "bf.gaa.xlsx")
+bf.gaa <- apply(expr.collapse, 1, GetBF, data.frame(model.design))
+SaveRDSgz(bf.gaa, "./save/bf.gaa.rda")
+bf.extract <- map(bf.gaa, extractBF) %>% map_dbl(extract2, "bf")
+bf.df <- data.frame(Symbol = featureNames(export.lumi), Bayes.Factor = bf.extract) %>% arrange(desc(Bayes.Factor))
+bf.sig <- filter(bf.df, Bayes.Factor > 3)$Symbol
+bf.posterior <- map(bf.gaa, posterior, iterations = 10000)
+SaveRDSgz(bf.posterior, "./save/bf.posterior.rda")
+bf.quantile <- map(bf.posterior, magrittr::extract, TRUE, 1) %>% map(quantile, c(0.025, 0.975)) %>% reduce(rbind) %>% set_colnames(c("CI_2.5", "CI_97.5")) %>% data.frame
+bf.quantile$Median <- map(bf.posterior, magrittr::extract, TRUE, 1) %>% map_dbl(median)
+bf.quantile$Symbol <- featureNames(export.lumi)
+bf.posterior.df <- left_join(bf.df, bf.quantile)
+write.xlsx(bf.posterior.df, "bf.gaa.xlsx")
 
-lumi.filter <- export.lumi[skew.filter$Symbol,]
-#Limma fit
-fit <- lmFit(scale(exprs(lumi.filter)), model.design)
-fit$df.residual <- (fit$df.residual - 5)
-fitb <- eBayes(fit)
-fitb$t[,2] %<>% abs #Something weird going on here?
+#lumi.filter <- export.lumi[skew.filter$Symbol,]
+##Limma fit
+#fit <- lmFit(scale(exprs(lumi.filter)), model.design)
+#fit$df.residual <- (fit$df.residual - 5)
+#fitb <- eBayes(fit)
+#fitb$t[,2] %<>% abs #Something weird going on here?
 
-top.gaa <- topTable(fitb, coef = 2, n = Inf)
-top.gaa$Symbol <- rownames(top.gaa)
-ebam.gaa <- limma2ebam(fitb, coef = 2, moderate = TRUE, delta = 0.9)  
-ebam2excel(ebam.gaa, 0.9, "ebam.gaa.csv")
+#top.gaa <- topTable(fitb, coef = 2, n = Inf)
+#top.gaa$Symbol <- rownames(top.gaa)
+#ebam.gaa <- limma2ebam(fitb, coef = 2, moderate = TRUE, delta = 0.9)  
+#ebam2excel(ebam.gaa, 0.9, "ebam.gaa.csv")
 
-ebam.gaa.df <- data.frame(Z.score = signif(ebam.gaa@z, 3), Posterior = signif(ebam.gaa@posterior, 3), Coefficient = signif(fitb$coef[,2], 3))
-ebam.gaa.df$Symbol <- rownames(ebam.gaa.df)
-ebam.gaa.df %<>% arrange(desc(Posterior))
-write.xlsx(ebam.gaa.df, "ebam.gaa.xlsx")
-SaveRDSgz(ebam.gaa.df, "ebam.gaa.df.rda")
+#ebam.gaa.df <- data.frame(Z.score = signif(ebam.gaa@z, 3), Posterior = signif(ebam.gaa@posterior, 3), Coefficient = signif(fitb$coef[,2], 3))
+#ebam.gaa.df$Symbol <- rownames(ebam.gaa.df)
+#ebam.gaa.df %<>% arrange(desc(Posterior))
+#write.xlsx(ebam.gaa.df, "ebam.gaa.xlsx")
+#SaveRDSgz(ebam.gaa.df, "ebam.gaa.df.rda")
+#ebam.annot <- left_join(ebam.gaa.df, bm.table) %>% select(Symbol, Definition, Coefficient, Posterior, Z.score)
 
 #Annotate top table
 ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(featureNames(export.lumi)), mart = ensembl)
 bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
 colnames(bm.table) <- c("Symbol", "Definition")
-top.gaa.annot <- left_join(top.gaa, bm.table) %>% select(Symbol, Definition, logFC, B, P.Value, adj.P.Val, t)
-CorrelationWorkbook(top.gaa.annot, "gaa.cor.xlsx")
+bf.gaa.annot <- left_join(bf.posterior.df, bm.table) %>% select(Symbol, Definition, Bayes.Factor, Median, CI_2.5, CI_97.5)
+BayesWorkbook(bf.gaa.annot, "bf.gaa.xlsx")
 
-ebam.annot <- left_join(ebam.gaa.df, bm.table) %>% select(Symbol, Definition, Coefficient, Posterior, Z.score)
-BayesWorkbook(ebam.annot, "ebam.annot.xlsx")
+bf.gaa.plot <- mutate(bf.posterior.df, Log.Bayes.Factor = log10(bf.posterior.df$Bayes.Factor))
+
+BayesPlot <- function(siggene, filename, threshold, plot.title, posterior.column = "Posterior", log.column = "logFC", xlabel = "Log Fold Change", ylabel = "Posterior Probability") {
+    siggene$Significant <- siggene[[posterior.column]] > threshold 
+    siggene$Significant %<>% factor(levels = c(TRUE, FALSE)) %>% revalue(c("TRUE" = "Yes", "FALSE" = "No"))
+    p <- ggplot(siggene, aes_string(x = log.column, y = posterior.column)) + geom_point(aes(color = Significant))
+    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background = element_blank())
+    p <- p + theme(plot.background = element_blank(), panel.border = element_rect(size = 1, color = "black"), plot.title = element_text(hjust = 0.5))
+    p <- p + xlab(xlabel) + ylab(ylabel) + ggtitle(plot.title) + scale_color_manual(values = c("orange", "darkgreen"), name = "Significant", labels = c("Yes", "No"))
+    CairoPDF(filename, width = 5, height = 4, bg = "transparent")
+    print(p)
+    dev.off()
+}
+
+BayesPlot(bf.gaa.plot, "gaa_volcano", 0.5, "GAA1", "Log.Bayes.Factor", "Median", "Regression Coefficient", "Log Bayes Factor")
+
+#Enrichr
+gaa.gobiol.file <- "./enrichr/gaa/GO Biological Process.xlsx"
+gaa.gobiol <- read.xlsx(gaa.gobiol.file) 
+GetKappaCluster(file_path_sans_ext(gaa.gobiol.file), gaa.gobiol, modules.only$Symbol, "Bayes.Factor")
+
+gaa.gobiol.final <- slice(gaa.gobiol, c(1, 3, 13, 17))
+EnrichrPlot(gaa.gobiol.final, "gaa", plot.height = 3, plot.width = 6, "GAA1")
 
 #Top GAA1 correlated genes
 #Positive
@@ -728,3 +756,7 @@ p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.positio
 print(p)
 dev.off()
 
+elasticnet.table <- read.xlsx("../GAA_regression/elasticnet.table.xlsx") %>% select(-Definition)
+elasticnet.gaa <- filter(elasticnet.table, Coefficient > 0 | Coefficient < 0)
+gaa.combined <- left_join(elasticnet.gaa, bf.posterior.df)
+gaa.combined.filter <- filter(gaa.combined, Bayes.Factor > 3)
