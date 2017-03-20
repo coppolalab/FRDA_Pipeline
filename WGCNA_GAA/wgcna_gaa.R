@@ -488,10 +488,10 @@ BayesPlot <- function(siggene, filename, threshold, plot.title, posterior.column
     siggene$Significant <- siggene[[posterior.column]] > threshold 
     siggene$Significant %<>% factor(levels = c(TRUE, FALSE)) %>% revalue(c("TRUE" = "Yes", "FALSE" = "No"))
     p <- ggplot(siggene, aes_string(x = log.column, y = posterior.column)) + geom_point(aes(color = Significant))
-    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background = element_blank())
+    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "none")
     p <- p + theme(plot.background = element_blank(), panel.border = element_rect(size = 1, color = "black"), plot.title = element_text(hjust = 0.5))
     p <- p + xlab(xlabel) + ylab(ylabel) + ggtitle(plot.title) + scale_color_manual(values = c("orange", "darkgreen"), name = "Significant", labels = c("Yes", "No"))
-    CairoPDF(filename, width = 5, height = 4, bg = "transparent")
+    CairoPDF(filename, width = 4, height = 4, bg = "transparent")
     print(p)
     dev.off()
 }
