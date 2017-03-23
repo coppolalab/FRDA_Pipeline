@@ -3,13 +3,11 @@ library(WGCNA)
 library(flashClust)
 enableWGCNAThreads()
 library(BayesFactor)
-
 #For baseline processing
 library(limma)
 library(R.utils)
 library(lumi)
 library(biomaRt)
-
 #Plotting
 library(ggplot2)
 library(extrafont)
@@ -17,20 +15,16 @@ library(Cairo)
 library(igraph)
 library(TeachingDemos)
 library(UpSetR)
-
 #Reading and writing tables
 library(readr)
 library(openxlsx)
-
 #Functional programming
 library(magrittr)
 library(purrr)
-
 #Data arrangement
 library(dplyr)
 library(tidyr)
 library(broom)
-
 #String operations
 library(stringr)
 library(tools)
@@ -61,7 +55,8 @@ EigengeneBoxplot <- function(eigengene.df, status.vector, color) {
     gene.df <- data.frame(Status = status.vector, Expression = as.vector(eigengene.df[[color.column]]))
     gene.df$Status %<>% factor(levels = c("Control", "Carrier", "Patient"))
 
-    p <- ggplot(gene.df, aes(x = Status, y = Expression, fill = Status)) + geom_violin() + geom_boxplot(width = 0.1) + theme_bw()
+    p <- ggplot(gene.df, aes(x = Status, y = Expression, fill = Status)) + geom_violin(scale = "width", trim = FALSE) 
+    p <- p + geom_boxplot(width = 0.25, outlier.shape = NA) + theme_bw()
     p <- p + theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank())
     p <- p + theme(plot.background = element_blank(), axis.title.x = element_blank()) + ggtitle(str_c(capitalize(color), " Module"))
     p <- p + theme(panel.border = element_rect(color = "black", size = 1), plot.margin = unit(c(1,1,1,1), "lines"))
@@ -72,13 +67,16 @@ EigengeneBoxplot <- function(eigengene.df, status.vector, color) {
 }
 
 EstimateViolinPlot <- function(estimate.df, color, ylimits) {
-    estimate.plot <- as.matrix(estimate.df) %>% data.frame %>% select(matches("^Trait")) %>% gather(Group, Estimate) 
+    estimate.extract <- as.matrix(estimate.df) %>% data.frame 
+    estimate.groups <- select(estimate.extract, matches("^Trait")) 
+    estimate.add <- sweep(estimate.groups, 1, estimate.extract$mu, "+")
+    estimate.plot <- gather(estimate.add, Group, Estimate) 
     estimate.plot$Group %<>% str_replace("Trait\\.", "") %>% factor(levels = c("Control", "Carrier", "Patient"))
 
-    p <- ggplot(estimate.plot, aes(x = Group, y = Estimate, fill = Group)) + geom_violin() + geom_boxplot(width = 0.1, outlier.shape = NA)+ theme_bw()
+    p <- ggplot(estimate.plot, aes(x = Group, y = Estimate, fill = Group)) + geom_violin(scale = "width", trim = FALSE, draw_quantiles = c(0.05, 0.5, 0.95)) + theme_bw()
     p <- p + theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(color = "black", size = 1))
     p <- p + theme(plot.background = element_blank(), axis.title.x = element_blank(), axis.ticks.x = element_blank()) + ylim(ylimits) 
-    p <- p + ggtitle(str_c(capitalize(color), "Module", sep = " "))
+    p <- p + ylab("Eigengene Estimate") + theme(plot.title = element_text(hjust = 0.5)) + ggtitle(str_c(capitalize(color), "Module", sep = " ")) 
     CairoPDF(str_c(color, "estimate", sep = "."), width = 4, height = 4, bg = "transparent")
     print(p)
     dev.off()
@@ -159,20 +157,26 @@ EnrichrWorkbook <- function(database, full.df, colname) {
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-EnrichrPlot <- function(enrichr.df, filename, plot.title, plot.height = 5, plot.width = 8) {
+EnrichrPlot <- function(enrichr.df, filename, plot.title, plot.height = 5, plot.width = 8, color = "default") {
     enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map(unlist) %>% map_int(length)
     enrichr.df$Log.Bayes.Factor <- log10(enrichr.df$Bayes.Factor)
     enrichr.df$Term %<>% str_replace_all("\\ \\(GO.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% str_replace_all(",.*$", "")  #Remove any thing after the left parenthesis and convert to all lower case
-    enrichr.df$Format.Name <- str_c(enrichr.df$Term, " (", enrichr.df$Gene.Count, ")")
+    enrichr.df$Format.Name <- str_c(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")")
     enrichr.df %<>% arrange(Log.Bayes.Factor)
     enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
     enrichr.df.plot <- select(enrichr.df, Format.Name, Log.Bayes.Factor)  
 
-    p <- ggplot(enrichr.df.plot, aes(Format.Name, Log.Bayes.Factor)) + geom_bar(stat = "identity") + coord_flip() + theme_bw() + theme(legend.position = "none") 
+    p <- ggplot(enrichr.df.plot, aes(Format.Name, Log.Bayes.Factor)) 
+    if (color == "default") {
+        p <- p + geom_bar(stat = "identity") 
+    } else {
+        p <- p + geom_bar(stat = "identity", fill = color) 
+    }
+    p <- p + coord_flip() + theme_bw() + theme(legend.position = "none") 
     p <- p + theme(axis.title.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste(Log[10], ' Bayes Factor'))) + theme(plot.background = element_blank())
     p <- p + theme(panel.border = element_rect(color = "black", size = 1))
-    p <- p + ggtitle(plot.title)
-    CairoPDF(filename, height = plot.height, width = plot.width, bg = "transparent")
+    p <- p + theme(plot.title = element_text(hjust = 0.5)) + ggtitle(plot.title)
+    CairoPDF(str_c(filename, ".enrichr"), height = plot.height, width = plot.width, bg = "transparent")
     print(p)
     dev.off()
 }
@@ -281,7 +285,7 @@ lumi.pdata <- pData(lumi.import)
 lumi.pdata$Status %<>% factor(levels = c("Control", "Carrier", "Patient"))
 anova.status <- map_dbl(ME.genes, EigengeneANOVA, lumi.pdata$Status) %>% p.adjust("fdr") %>% signif(3)
 bayes.status <- map(ME.genes, EigengeneBayes, lumi.pdata$Status) 
-bf.status <- map(bayes.status, extractBF) %>% map_dbl(extract2, "bf")
+bf.status <- map(bayes.status, extractBF) %>% map_dbl(extract2, "bf") %>% map_dbl(log10)
 posterior.status <- map(bayes.status, posterior, iterations = 100000) 
 
 aov.status <- map(ME.genes, EigengeneAOV, lumi.pdata$Status)
@@ -309,8 +313,8 @@ dev.off()
 EigengeneBoxplot(ME.genes, lumi.pdata$Status, "black")
 EigengeneBoxplot(ME.genes, lumi.pdata$Status, "brown")
 
-EstimateViolinPlot(posterior.status$MEbrown, "brown", c(-0.020, 0.020))
-EstimateViolinPlot(posterior.status$MEblack, "black", c(-0.020, 0.020))
+EstimateViolinPlot(posterior.status$MEbrown, "brown", c(-0.020, 0.025))
+EstimateViolinPlot(posterior.status$MEblack, "black", c(-0.030, 0.020))
 
 #Generate network statistics
 all.degrees <- intramodularConnectivity(adjacency.expr, module.colors)
@@ -394,7 +398,7 @@ black.kegg.final <- slice(black.kegg, 9)
 black.reactome.final <- slice(black.reactome, c(3, 2))
 
 black.enrichr <- rbind(black.gobiol.final, black.kegg.final, black.reactome.final)
-EnrichrPlot(black.enrichr, "black.enrichr", "Black Module", plot.height = 4, plot.width = 5.5)
+EnrichrPlot(black.enrichr, "black", "Black Module", plot.height = 4, plot.width = 5.5)
 
 brown.gobiol.file <- "./enrichr/brown/GO Biological Process.xlsx"
 brown.gobiol <- read.xlsx(brown.gobiol.file) 
@@ -421,7 +425,7 @@ brown.gobiol.final <- slice(brown.gobiol, c(4, 41, 5, 25, 62, 131, 9, 2))
 brown.reactome.final <- slice(brown.reactome, c(13, 59))
 
 brown.enrichr <- rbind(brown.gobiol.final, brown.reactome.final)
-EnrichrPlot(brown.enrichr, "brown.enrichr", "Brown Module", plot.height = 4, plot.width = 5.5)
+EnrichrPlot(brown.enrichr, "brown", "Brown Module", plot.height = 4, plot.width = 5.5, color = "brown")
 
 #PPI for whole module
 black.ppi.all <- GetPPI(black.only$Symbol)

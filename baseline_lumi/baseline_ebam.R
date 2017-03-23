@@ -178,7 +178,7 @@ EnrichrPlot <- function(enrichr.df, enrichr.expr, filename, plot.title, plot.hei
     enrichr.df$Log.Up <- enrichr.df$Log.Bayes.Factor * enrichr.df$Up / enrichr.df$Gene.Count
     enrichr.df$Log.Down <- enrichr.df$Log.Bayes.Factor * enrichr.df$Down / enrichr.df$Gene.Count
     enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
-    enrichr.df$Format.Name <- str_c(enrichr.df$Term, " (", enrichr.df$Gene.Count, ")")
+    enrichr.df$Format.Name <- str_c(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")")
     enrichr.df %<>% arrange(Log.Bayes.Factor)
     enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
     enrichr.df.plot <- select(enrichr.df, Format.Name, Log.Up, Log.Down) %>% gather(Direction, Length, -Format.Name) 
@@ -189,7 +189,7 @@ EnrichrPlot <- function(enrichr.df, enrichr.expr, filename, plot.title, plot.hei
     p <- p + scale_fill_discrete(name = "Direction", labels = c("Up", "Down")) 
     p <- p + coord_flip() + theme_bw() + theme(axis.title.y = element_blank(), axis.ticks.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + ylab(expression(paste(Log[10], ' Bayes Factor')))
     p <- p + theme(plot.background = element_blank(), legend.background = element_blank(), axis.text.y = element_text(size = 12), panel.border = element_rect(color = "black", size = 1))
-    p <- p + ggtitle(plot.title)
+    p <- p + theme(plot.title = element_text(hjust = 0.5)) + ggtitle(plot.title)
     CairoPDF(filename, height = plot.height, width = plot.width, bg = "transparent")
     print(p)
     dev.off()
