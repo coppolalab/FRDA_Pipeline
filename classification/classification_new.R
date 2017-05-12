@@ -1,16 +1,3 @@
-#String operations
-library(stringr)
-
-#Plotting
-library(ggplot2)
-library(Cairo)
-
-#Reading and writing tables
-library(readr)
-library(openxlsx)
-
-#Classification
-library(MASS)
 library(limma)
 library(annotate)
 library(lumiHumanAll.db)
@@ -20,19 +7,17 @@ library(Biobase)
 library(lumi)
 library(biomaRt)
 
-#Data arrangement
-library(dplyr)
-library(tidyr)
+library(Cairo)
+library(openxlsx)
 
-#Functional programming
-library(magrittr)
-library(purrr)
 library(rlist)
+library(stringr)
+library(magrittr)
+library(tidyverse)
 
-CATWorkbook <- function(rank.table, filename) {
+ClassifierWorkbook <- function(rank.table, filename) {
     score.key <- colnames(rank.table) %>% str_detect("Coefficient.") 
     score.cols <- which(score.key)
-    print(head(rank.table))
 
     wb <- createWorkbook()
     addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
@@ -84,19 +69,6 @@ CairoPDF("svm.pco.top5", width = 20, height = 5)
 print(top5.plot)
 dev.off()
 
-orig.pco <- isoMDS(dist(t(exprs(pco.collapse)), method = "manhattan"))
-orig.pco.points <- data.frame(orig.pco$points)
-colnames(orig.pco.points) <- c("PC1", "PC2")
-orig.pco.df <- mutate(orig.pco.points, Status = pco.collapse$Status)
-
-top.pco <- isoMDS(dist(t(exprs(pco.collapse.top)), method = "manhattan"))
-top.pco.points <- data.frame(top.pco$points)
-colnames(top.pco.points) <- c("PC1", "PC2")
-top.pco.df <- mutate(top.pco.points, Status = pco.collapse.top$Status)
-
-PCAPlot(orig.pco.df, "Status", "Status", "mds_pco_all")
-PCAPlot(top.pco.df, "Status", "Status", "mds_pco_top")
-
 pca.lasso <- glmnet(t(exprs(pca.collapse)), pca.collapse$Status, "binomial", nlambda = 1000, alpha = 1)
 pca.lasso.coef <- coef(pca.lasso)[-1,1000]
 pca.lasso.df <- data.frame(Symbol = names(pca.lasso.coef), Coefficient.pca = pca.lasso.coef) %>% arrange(desc(abs(Coefficient.pca)))
@@ -112,19 +84,6 @@ top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free") + scale_
 CairoPDF("svm.pca.top5", width = 20, height = 5)
 print(top5.plot)
 dev.off()
-
-orig.pca <- isoMDS(dist(t(exprs(pca.collapse)), method = "manhattan"))
-orig.pca.points <- data.frame(orig.pca$points)
-colnames(orig.pca.points) <- c("PC1", "PC2")
-orig.pca.df <- mutate(orig.pca.points, Status = pca.collapse$Status)
-
-top.pca <- isoMDS(dist(t(exprs(pca.collapse.top)), method = "manhattan"))
-top.pca.points <- data.frame(top.pca$points)
-colnames(top.pca.points) <- c("PC1", "PC2")
-top.pca.df <- mutate(top.pca.points, Status = pca.collapse.top$Status)
-
-PCAPlot(orig.pca.df, "Status", "Status", "mds_pca_all")
-PCAPlot(top.pca.df, "Status", "Status", "mds_pca_top")
 
 cc.collapse$Status %<>% factor(levels = c("Control", "Carrier"))
 cc.lasso <- glmnet(t(exprs(cc.collapse)), cc.collapse$Status, "binomial", nlambda = 1000, alpha = 1)
@@ -143,45 +102,75 @@ CairoPDF("svm.cc.top5", width = 20, height = 5)
 print(top5.plot)
 dev.off()
 
-orig.cc <- isoMDS(dist(t(exprs(cc.collapse)), method = "manhattan"))
-orig.cc.points <- data.frame(orig.cc$points)
-colnames(orig.cc.points) <- c("PC1", "PC2")
-orig.cc.df <- mutate(orig.cc.points, Status = cc.collapse$Status)
-
-top.cc <- isoMDS(dist(t(exprs(cc.collapse.top)), method = "manhattan"))
-top.cc.points <- data.frame(top.cc$points)
-colnames(top.cc.points) <- c("PC1", "PC2")
-top.cc.df <- mutate(top.cc.points, Status = cc.collapse.top$Status)
-
-PCAPlot(orig.cc.df, "Status", "Status", "mds_cc_all")
-PCAPlot(top.cc.df, "Status", "Status", "mds_cc_top")
-
-lasso.table <- left_join(pco.lasso.df, pca.lasso.df) %>% left_join(cc.lasso.df)
+lasso.table <- left_join(pco.lasso.df, pca.lasso.df) %>% 
+    left_join(cc.lasso.df) %>% 
+    as_tibble %>%
+    mutate_if(is.numeric, signif, digits = 3)
 ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(lasso.table$Symbol), mart = ensembl)
 bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
 colnames(bm.table) <- c("Symbol", "Definition")
 lasso.annot <- left_join(lasso.table, bm.table) %>% dplyr::select(Symbol, Definition, dplyr::contains("Coefficient")) 
-CATWorkbook(lasso.annot, "lasso.table.xlsx")
-
-kappa.vector <- c(svm.pco.final$results$Kappa, svm.pca.final$results$Kappa, svm.cc.final$results$Kappa)
-kappasd.vector <- c(svm.pco.final$results$KappaSD, svm.pca.final$results$KappaSD, svm.cc.final$results$KappaSD)
-comparison.vector <- c("Patient vs. Control", "Patient vs. Carrier", "Carrier vs. Control") 
-comparison.vector %<>% factor(levels = comparison.vector)
-svm.df <- data.frame(Comparison = comparison.vector, Kappa = kappa.vector, KappaSD = kappasd.vector)
-
-rfe.plot <- ggplot(svm.df, aes(x = Comparison, y = Kappa, fill = Comparison))  
-rfe.plot <- rfe.plot + geom_col(color = "black") + geom_errorbar(aes(ymax = Kappa + KappaSD, ymin = Kappa - KappaSD), width = 0.25, color = "black")  
-rfe.plot <- rfe.plot + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) 
-rfe.plot <- rfe.plot + theme(plot.background = element_blank(), legend.position = "none", panel.border = element_rect(color = "black", size = 1))
-rfe.plot <- rfe.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.x = element_blank())
-CairoPDF("svm.rfe", width = 3, height = 4)
-print(rfe.plot)
-dev.off()
+ClassifierWorkbook(lasso.annot, "lasso.table.xlsx")
 
 objects.size <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(objects.size) <- ls()
 unlist(objects.size) %>% sort
+
+#orig.pco <- isoMDS(dist(t(exprs(pco.collapse)), method = "manhattan"))
+#orig.pco.points <- data.frame(orig.pco$points)
+#colnames(orig.pco.points) <- c("PC1", "PC2")
+#orig.pco.df <- mutate(orig.pco.points, Status = pco.collapse$Status)
+
+#top.pco <- isoMDS(dist(t(exprs(pco.collapse.top)), method = "manhattan"))
+#top.pco.points <- data.frame(top.pco$points)
+#colnames(top.pco.points) <- c("PC1", "PC2")
+#top.pco.df <- mutate(top.pco.points, Status = pco.collapse.top$Status)
+
+#PCAPlot(orig.pco.df, "Status", "Status", "mds_pco_all")
+#PCAPlot(top.pco.df, "Status", "Status", "mds_pco_top")
+
+#orig.pca <- isoMDS(dist(t(exprs(pca.collapse)), method = "manhattan"))
+#orig.pca.points <- data.frame(orig.pca$points)
+#colnames(orig.pca.points) <- c("PC1", "PC2")
+#orig.pca.df <- mutate(orig.pca.points, Status = pca.collapse$Status)
+
+#top.pca <- isoMDS(dist(t(exprs(pca.collapse.top)), method = "manhattan"))
+#top.pca.points <- data.frame(top.pca$points)
+#colnames(top.pca.points) <- c("PC1", "PC2")
+#top.pca.df <- mutate(top.pca.points, Status = pca.collapse.top$Status)
+
+#PCAPlot(orig.pca.df, "Status", "Status", "mds_pca_all")
+#PCAPlot(top.pca.df, "Status", "Status", "mds_pca_top")
+
+#orig.cc <- isoMDS(dist(t(exprs(cc.collapse)), method = "manhattan"))
+#orig.cc.points <- data.frame(orig.cc$points)
+#colnames(orig.cc.points) <- c("PC1", "PC2")
+#orig.cc.df <- mutate(orig.cc.points, Status = cc.collapse$Status)
+
+#top.cc <- isoMDS(dist(t(exprs(cc.collapse.top)), method = "manhattan"))
+#top.cc.points <- data.frame(top.cc$points)
+#colnames(top.cc.points) <- c("PC1", "PC2")
+#top.cc.df <- mutate(top.cc.points, Status = cc.collapse.top$Status)
+
+#PCAPlot(orig.cc.df, "Status", "Status", "mds_cc_all")
+#PCAPlot(top.cc.df, "Status", "Status", "mds_cc_top")
+
+#kappa.vector <- c(svm.pco.final$results$Kappa, svm.pca.final$results$Kappa, svm.cc.final$results$Kappa)
+#kappasd.vector <- c(svm.pco.final$results$KappaSD, svm.pca.final$results$KappaSD, svm.cc.final$results$KappaSD)
+#comparison.vector <- c("Patient vs. Control", "Patient vs. Carrier", "Carrier vs. Control") 
+#comparison.vector %<>% factor(levels = comparison.vector)
+#svm.df <- data.frame(Comparison = comparison.vector, Kappa = kappa.vector, KappaSD = kappasd.vector)
+
+#rfe.plot <- ggplot(svm.df, aes(x = Comparison, y = Kappa, fill = Comparison))  
+#rfe.plot <- rfe.plot + geom_col(color = "black") + geom_errorbar(aes(ymax = Kappa + KappaSD, ymin = Kappa - KappaSD), width = 0.25, color = "black")  
+#rfe.plot <- rfe.plot + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) 
+#rfe.plot <- rfe.plot + theme(plot.background = element_blank(), legend.position = "none", panel.border = element_rect(color = "black", size = 1))
+#rfe.plot <- rfe.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.x = element_blank())
+#CairoPDF("svm.rfe", width = 3, height = 4)
+#print(rfe.plot)
+#dev.off()
+
 
 ##Model Testing
 #pbmc.final <- readRDS.gz("../../pbmc/save/pbmc.collapse.rda")

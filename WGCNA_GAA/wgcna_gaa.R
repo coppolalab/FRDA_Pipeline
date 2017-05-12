@@ -3,43 +3,23 @@ library(WGCNA)
 library(flashClust)
 enableWGCNAThreads()
 
-#For baseline processing
 library(limma)
-library(sva)
 library(lumi)
 library(lumiHumanAll.db)
 library(annotate)
 library(biomaRt)
 library(BayesFactor)
-library(siggenes)
-library(BayesianFirstAid)
 
-#String operations
-library(stringr)
-library(tools)
-library(R.utils)
-
-#Plotting
-library(ggplot2)
-library(extrafont)
 library(Cairo)
 library(heatmap.plus)
-
-#Reading and writing tables
-library(readr)
 library(openxlsx)
-library(parallel)
 
-#Functional programming
-library(magrittr)
-library(purrr)
-
-#Data arrangement
-library(dplyr)
-library(plyr)
-library(tidyr)
+library(tools)
+library(R.utils)
 library(broom)
-library(UpSetR)
+library(stringr)
+library(magrittr)
+library(tidyverse)
 
 #Boxplot
 Boxplot <- function(filename, lumi.object, maintext, ylabtext) {
@@ -328,7 +308,9 @@ GetKscaled <- function(gene.list, module.membership) {
 
 source("../common_functions.R")
 
-lumi.import <- readRDS.gz(file = "../baseline_lumi/save/lumi.baseline.rda")
+lumi.import <- ReadRDSgz(file = "../baseline_lumi/save/lumi.baseline.rda")
+patient.pheno <- pData(lumi.import) %>% as_tibble %>% filter(Status == "Patient")
+write.xlsx(patient.pheno, "patient_pheno.xlsx")
 lumi.patient <- lumi.import[,lumi.import$Status == "Patient" & !is.na(lumi.import$GAA1) & lumi.import$Age < 35 & lumi.import$Age > 11]
 batch.colors <- data.frame(Batch = factor(1:19), Color = c("black","navy","blue","red","orange","cyan","tan","purple","lightcyan","lightyellow","darkseagreen","brown","salmon","gold4","pink","green", "blue4", "red4", "green4")) #Assign batch colors
 lumi.patient$Batch.Color <- left_join(select(pData(lumi.patient), Batch), batch.colors) %>% select(Color) #add variable for batch color
@@ -457,13 +439,19 @@ SaveRDSgz(model.design, file = "./save/model.design.rda")
 ##BF test
 bf.gaa <- apply(expr.collapse, 1, GetBF, data.frame(model.design))
 SaveRDSgz(bf.gaa, "./save/bf.gaa.rda")
-bf.extract <- map(bf.gaa, extractBF) %>% map_dbl(extract2, "bf") %>% map_dbl(log10)
-bf.df <- data.frame(Symbol = featureNames(export.lumi), Log.Bayes.Factor = bf.extract) %>% arrange(desc(Log.Bayes.Factor))
+bf.extract <- map(bf.gaa, extractBF) %>% map_dbl(extract2, "bf") %>% map_dbl(log10) %>% signif(3)
+bf.df <- tibble(Symbol = featureNames(export.lumi), Log.Bayes.Factor = bf.extract) %>% arrange(desc(Log.Bayes.Factor))
 bf.sig <- filter(bf.df, Bayes.Factor > 3)$Symbol
 bf.posterior <- map(bf.gaa, posterior, iterations = 10000)
 SaveRDSgz(bf.posterior, "./save/bf.posterior.rda")
-bf.quantile <- map(bf.posterior, magrittr::extract, TRUE, 1) %>% map(quantile, c(0.025, 0.975)) %>% reduce(rbind) %>% set_colnames(c("CI_2.5", "CI_97.5")) %>% data.frame
-bf.quantile$Median <- map(bf.posterior, magrittr::extract, TRUE, 1) %>% map_dbl(median)
+bf.quantile <- map(bf.posterior, magrittr::extract, TRUE, 1) %>% 
+    map(quantile, c(0.025, 0.975)) %>% 
+    reduce(rbind) %>% 
+    set_colnames(c("CI_2.5", "CI_97.5")) %>% 
+    as_tibble %>% mutate_all(signif, digits = 3)
+bf.quantile$Median <- map(bf.posterior, magrittr::extract, TRUE, 1) %>% 
+    map_dbl(median) %>% 
+    signif(3)
 bf.quantile$Symbol <- featureNames(export.lumi)
 bf.posterior.df <- left_join(bf.df, bf.quantile)
 write.xlsx(bf.posterior.df, "bf.gaa.xlsx")

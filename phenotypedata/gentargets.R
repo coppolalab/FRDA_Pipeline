@@ -1,15 +1,10 @@
-library(magrittr)
-library(plyr)
-library(dplyr)
 library(openxlsx)
-library(readr)
-library(stringr)
-library(purrr)
-library(functional)
 library(lubridate)
 library(R.utils)
-library(reshape2)
 library(rlist)
+library(stringr)
+library(magrittr)
+library(tidyverse)
 
 #Find sample ranges which skip
 find.skips <- function(data.vector) {
@@ -150,7 +145,7 @@ targets.key.all[grepl(replace.PIDNs.key, targets.key.all$PIDN),]$PIDN <- as.char
 #targets.key.all %<>% arrange(PIDN, Date.Drawn)
 
 #Add date drawn so that age at draw can be calculated
-targets.dates.full <- read.xlsx("../phenotypedata/dan_finalrna_20160826T161916.xlsx")
+targets.dates.full <- read.xlsx("../phenotypedata/dan_finalrna_20160826T161916.xlsx") 
 targets.dates.full$PIDN %<>% str_replace_all("FA_", "")
 targets.dates <- select(targets.dates.full, PIDN, RIN, Date.Drawn, Sample.Num)# %>% arrange(PIDN)
 targets.dates$Sample.Num %<>% as.character

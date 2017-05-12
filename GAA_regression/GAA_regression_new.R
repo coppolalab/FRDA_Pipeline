@@ -1,32 +1,16 @@
-#String operations
-library(stringr)
+library(caret)
+library(glmnet)
+library(biomaRt)
+library(lumi)
 
-#Plotting
-library(ggplot2)
+library(openxlsx)
 library(Cairo)
 
-#Reading and writing tables
-library(readr)
-library(openxlsx)
-
-#Regression
-library(doMC)
-library(caret)
-library(AppliedPredictiveModeling)
-library(glmnet)
-library(kernlab)
-library(biomaRt)
-
-#Data arrangement
-library(dplyr)
-library(lumi)
-library(tidyr)
-
-#Functional programming
-library(magrittr)
-library(purrr)
 library(broom)
 library(rlist)
+library(stringr)
+library(magrittr)
+library(tidyverse)
 
 source("../common_functions.R")
 
@@ -49,8 +33,7 @@ GAADensityPlot <- function(gaa.vector, filename) {
     dev.off()
 }
 
-CARWorkbook <- function(rank.table, filename) {
-    print(colnames(rank.table))
+RegressionWorkbook <- function(rank.table, filename) {
     score.key <- colnames(rank.table) %>% str_detect("Coefficient") 
     score.cols <- which(score.key)
 
@@ -81,8 +64,9 @@ GAADensityPlot(lumi.cleaned$GAA1, "gaa_density")
 svm.fitcontrol <- trainControl(method = "boot632", verboseIter = TRUE, number = 25, savePredictions = TRUE)
 
 gaa.enet <- glmnet(t(exprs(lumi.cleaned)), lumi.cleaned$GAA1, "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive", standardize.response = TRUE)
-gaa.enet.coef <- coef(gaa.enet)[-1,ncol(gaa.enet$beta)]
-gaa.enet.df <- data.frame(Symbol = names(gaa.enet.coef), Coefficient = gaa.enet.coef) %>% arrange(desc(abs(Coefficient)))
+gaa.enet.stand <- glmnet(t(exprs(lumi.cleaned)), scale(lumi.cleaned$GAA1), "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive")
+gaa.enet.coef <- coef(gaa.enet.stand)[-1,ncol(gaa.enet$beta)]
+gaa.enet.df <- tibble(Symbol = names(gaa.enet.coef), Coefficient = signif(gaa.enet.coef, 3)) %>% arrange(desc(abs(Coefficient)))
 
 lumi.top <- lumi.cleaned[gaa.enet.coef != 0,]
 svm.train <- train(x = t(exprs(lumi.top)), y = lumi.top$GAA1, preProcess = c("center", "scale"), metric = "RMSE", method = "svmPoly", trControl = svm.fitcontrol) 
@@ -98,8 +82,10 @@ ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(gaa.enet.df$Symbol), mart = ensembl)
 bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
 colnames(bm.table) <- c("Symbol", "Definition")
-enet.annot <- left_join(gaa.enet.df, bm.table) %>% select(Symbol, Definition, Coefficient)
-CARWorkbook(enet.annot, "./elasticnet.table.xlsx")
+enet.annot <- left_join(gaa.enet.df, bm.table) %>% 
+    select(Symbol, Definition, Coefficient) %>% 
+    as_tibble
+RegressionWorkbook(enet.annot, "./elasticnet.table.xlsx")
 
 enet.positive <- filter(gaa.enet.df, Coefficient > 0)
 enet.negative <- filter(gaa.enet.df, Coefficient < 0)
