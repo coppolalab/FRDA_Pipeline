@@ -5,6 +5,7 @@ library(rlist)
 library(stringr)
 library(magrittr)
 library(tidyverse)
+library(forcats)
 
 #Find sample ranges which skip
 find.skips <- function(data.vector) {
@@ -62,54 +63,69 @@ join.dups <- function(dup.vector, multiple.melt) {
 
 ucla.1 <- read.xlsx("./ucla_rna updated- w UCLA 083115 update.xlsx")
 ucla.1$dob[ucla.1$dob == "MISSING"] <- NA
-ucla.1$dob <- parse_date_time(ucla.1$dob, c("mdy", "ymd")) %>% as.Date %>% as.character
+ucla.1$dob <- parse_date_time(ucla.1$dob, c("mdy", "ymd")) %>% 
+    as.Date %>% 
+    as.character
 
 ucla.2 <- read.xlsx("./Copy of UCLA DATA FOR JEN 9.25.15.xlsx")
 ucla.2$dob[ucla.2$dob == "MISSING"] <- NA
-ucla.2$dob <- parse_date_time(ucla.2$dob, c("mdy", "ymd")) %>% as.Date %>% as.character
+ucla.2$dob <- parse_date_time(ucla.2$dob, c("mdy", "ymd")) %>% 
+    as.Date %>% 
+    as.character
 
 ucla.3 <- read.xlsx("./newpatients_ucla oct 2015.xlsx")
-ucla.3$DOB <- parse_date_time(ucla.3$DOB, c("mdy", "ymd")) %>% as.Date %>% as.character 
+ucla.3$DOB <- parse_date_time(ucla.3$DOB, c("mdy", "ymd")) %>% 
+    as.Date %>% 
+    as.character 
 ucla.3.reduce <- select(ucla.3, PIDN, Sex, Status, DOB, Onset, GAA1, GAA2)
 
 #chop.all <- rbind(select(chop.1, -Order), select(chop.2, -Notes))
-chop.all <- read.xlsx("./Phenotype Data 2015-11-19.xlsx", detectDates = FALSE) %>% select(PIDN:GAA2)
-chop.all$DOB %<>% parse_date_time(c("mdy", "ymd")) %>% as.Date %>% as.character
+chop.all <- read.xlsx("./Phenotype Data 2015-11-19.xlsx", detectDates = FALSE) %>% 
+    select(PIDN:GAA2)
+chop.all$DOB %<>% parse_date_time(c("mdy", "ymd")) %>% 
+    as.Date %>% 
+    as.character
 chop.all$Site <- "CHOP"
 
-ucla.rbind <- rbind(ucla.1, ucla.2) %>% select(PIDN, sex, Status, dob, onset, gaa1, gaa2) 
+ucla.rbind <- rbind(ucla.1, ucla.2) %>% 
+    select(PIDN, sex, Status, dob, onset, gaa1, gaa2) 
 colnames(ucla.rbind) <- c("PIDN", "Sex", "Status", "DOB", "Onset", "GAA1", "GAA2")
 ucla.all <- rbind(ucla.rbind, ucla.3.reduce)
 ucla.all$PIDN %<>% str_replace("FA_", "")
 #ucla.all$Family <- final.block3:(final.block3 + nrow(ucla.all) - 1)
 ucla.all$Site <- "UCLA"
 
-subjects.reduce <- rbind(chop.all, ucla.all) %>% select(-Onset)
+subjects.reduce <- rbind(chop.all, ucla.all) %>% as_tibble #%>% select(-Onset)
 subjects.reduce$Age <- NA
-subjects.reduce %<>% select(PIDN, Sex, Status, DOB, Age, GAA1, GAA2, Site)
+subjects.reduce %<>% select(PIDN, Sex, Status, DOB, Age, Onset, GAA1, GAA2, Site)
 save(subjects.reduce, file = "subjects.reduce.rda")
 
-last.pheno <- read.xlsx("./new_PIDNS_filled.xlsx")
+last.pheno <- read.xlsx("./missing_onset_filled.xlsx")
 last.pheno$Status %<>% capitalize
-last.pheno$Sex %<>% revalue(c(M = "Male", F = "Female"))
+last.pheno$Sex %<>% fct_recode(Male = "M", Female = "F")
 last.pheno$Site <- "CHOP"
 last.pheno$DOB <- NA
-last.pheno %<>% select(PIDN, Sex, Status, DOB, Age, GAA1, GAA2, Site)
+last.pheno %<>% select(PIDN, Sex, Status, DOB, Age, Onset, GAA1, GAA2, Site)
 
-subjects.all <- rbind(subjects.reduce, last.pheno) %>% filter(!duplicated(PIDN))
+subjects.all <- rbind(subjects.reduce, last.pheno) %>% 
+    filter(!duplicated(PIDN))
 
 #Fix GAA
-subjects.gaa <- select(subjects.all, PIDN, GAA1, GAA2) %>% filter(!is.na(GAA1)) %>% filter(!is.na(GAA2))
-repeat1 <- apply(select(subjects.gaa, GAA1:GAA2), 1, Compose(as.numeric, min))
-repeat2 <- apply(select(subjects.gaa, GAA1:GAA2), 1, Compose(as.numeric, max))
+subjects.gaa <- select(subjects.all, PIDN, GAA1, GAA2) %>% 
+    filter(!is.na(GAA1)) %>% 
+    filter(!is.na(GAA2))
+repeat1 <- apply(select(subjects.gaa, GAA1:GAA2), 1, as.numeric) %>% 
+    apply(2, max)
+repeat2 <- apply(select(subjects.gaa, GAA1:GAA2), 1, as.numeric) %>% 
+    apply(2, min)
 subjects.all[!is.na(subjects.all$GAA1) & !is.na(subjects.all$GAA2), ]$GAA1 <- as.character(repeat1)
 subjects.all[!is.na(subjects.all$GAA1) & !is.na(subjects.all$GAA2), ]$GAA2 <- as.character(repeat2)
 subjects.all$GAA1 %<>% as.numeric
 subjects.all$GAA2 %<>% as.numeric
 
-hell.conditions <- subjects.all$GAA1 < 40 & !is.na(subjects.all$GAA1)
-subjects.all[hell.conditions,]$GAA1 <- NA
-subjects.all[is.na(subjects.all$GAA1),]$GAA1 <- subjects.all[is.na(subjects.all$GAA1),]$GAA2
+#hell.conditions <- subjects.all$GAA1 < 40 & !is.na(subjects.all$GAA1)
+#subjects.all[hell.conditions,]$GAA1 <- NA
+#subjects.all[is.na(subjects.all$GAA1),]$GAA1 <- subjects.all[is.na(subjects.all$GAA1),]$GAA2
 
 #Read in microarray targets
 targets <- read.xlsx("./targets_chop_upd.xlsx") 
@@ -129,7 +145,9 @@ targets.new.key$SCGC.Code <- "2014-278"
 targets.newer <- read.xlsx("./2015-9185A_Sample Key-FA.xlsx")
 targets.newer$Slide.ID <- paste(targets.newer$general.array, targets.newer$genexstripe.controling.stripe, sep = "_")
 targets.newer$FA_PatientID %<>% str_replace("FA_", "")
-targets.newer$Sample.Num <- str_split(targets.newer$External.ID, "_") %>% laply(`[`, 3)
+targets.newer$Sample.Num <- str_split(targets.newer$External.ID, "_") %>% 
+    map_chr(magrittr::extract, 3) %>% 
+    as.numeric
 targets.newer.key <- select(targets.newer, External.ID, FA_PatientID, Sample.Num, Slide.ID)
 targets.newer.key$Batch <- 18
 targets.newer.key$SCGC.Code <- "2015-9185"
@@ -144,6 +162,25 @@ old.PIDNs <- targets.key.all[grepl(replace.PIDNs.key, targets.key.all$PIDN),]$PI
 targets.key.all[grepl(replace.PIDNs.key, targets.key.all$PIDN),]$PIDN <- as.character(replace.PIDNs[match(old.PIDNs, replace.PIDNs$Orig),]$New)
 #targets.key.all %<>% arrange(PIDN, Date.Drawn)
 
+#Read in last target sheet 
+targets.newest <- read.xlsx("./2016-9111_filled.xlsx")
+targets.newest$Slide.ID <- str_c(targets.newest$general.array, targets.newest$genexstripe.controling.stripe, sep = "_")
+newest.split <- str_split_fixed(targets.newest$External.ID, "_", 3) %>% 
+    data.frame
+colnames(newest.split) <- c("Prefix", "PIDN", "Sample.Num")
+targets.newest$PIDN <- newest.split$PIDN
+targets.newest$Sample.Num <- newest.split$Sample.Num
+targets.newest$Batch <- 19
+targets.newest$RIN <- map(targets.newest$Bioanalyzer, str_split, " ") %>% 
+    map(unlist) %>% 
+    map_chr(magrittr::extract, 2) %>% 
+    as.numeric
+targets.newest %<>% select(External.ID, PIDN, Sample.Num, Slide.ID, Batch, SCGC.Project.ID, RIN, Date.Blood.Drawn)
+colnames(targets.newest)[c(1,6,8)] <- c("Sample.Name", "SCGC.Code", "Date.Drawn")
+targets.newest$Date.Drawn %<>% parse_date_time("mdy") %>% 
+    as.Date %>% 
+    as.character
+
 #Add date drawn so that age at draw can be calculated
 targets.dates.full <- read.xlsx("../phenotypedata/dan_finalrna_20160826T161916.xlsx") 
 targets.dates.full$PIDN %<>% str_replace_all("FA_", "")
@@ -151,25 +188,14 @@ targets.dates <- select(targets.dates.full, PIDN, RIN, Date.Drawn, Sample.Num)# 
 targets.dates$Sample.Num %<>% as.character
 targets.dates$Date.Drawn %<>% as.character
 
-#Read in last target sheet 
-targets.newest <- read.xlsx("./2016-9111_filled.xlsx")
-targets.newest$Slide.ID <- str_c(targets.newest$general.array, targets.newest$genexstripe.controling.stripe, sep = "_")
-newest.split <- str_split_fixed(targets.newest$External.ID, "_", 3) %>% data.frame
-colnames(newest.split) <- c("Prefix", "PIDN", "Sample.Num")
-targets.newest$PIDN <- newest.split$PIDN
-targets.newest$Sample.Num <- newest.split$Sample.Num
-targets.newest$Batch <- 19
-targets.newest$RIN <- map(targets.newest$Bioanalyzer, str_split, " ") %>% map(unlist) %>% map_chr(extract, 2) %>% as.numeric
-targets.newest %<>% select(External.ID, PIDN, Sample.Num, Slide.ID, Batch, SCGC.Project.ID, RIN, Date.Blood.Drawn)
-colnames(targets.newest)[c(1,6,8)] <- c("Sample.Name", "SCGC.Code", "Date.Drawn")
-targets.newest$Date.Drawn %<>% parse_date_time("mdy") %>% as.Date %>% as.character
-
 #Merge targets and RINs/draw dates
 targets.final <- left_join(targets.key.all, targets.dates) %>% rbind(targets.newest)
 
 targets.final$Array.Type <- "Human HT-12 v 4.0"
 reps.conditions <- targets.final$Sample.Num == "1r"
-reps.names <- targets.final[reps.conditions,]$Sample.Name %>% str_replace("r", "") %>% paste(collapse = "|")
+reps.names <- targets.final[reps.conditions,]$Sample.Name %>% 
+    str_replace("r", "") %>% 
+    paste(collapse = "|")
 targets.final[reps.conditions,]$Date.Received <- filter(targets.final, grepl(reps.names, Sample.Name) & Sample.Num != "1r")$Date.Received
 targets.final[reps.conditions,]$Date.Drawn <- filter(targets.final, grepl(reps.names, Sample.Name) & Sample.Num != "1r")$Date.Drawn
 targets.final[reps.conditions,]$RIN <- filter(targets.final, grepl(reps.names, Sample.Name) & Sample.Num != "1r")$RIN
@@ -180,36 +206,65 @@ subjects.all$Sex %<>% tolower %>% capitalize
 targets.final <- left_join(targets.final, subjects.all)
 targets.final$Sample.Num %<>% factor
 targets.final$Batch %<>% factor
-targets.final$Status %<>% tolower %>% capitalize %>% factor
+targets.final$Onset %<>% as.numeric
+targets.final$Status %<>% tolower %>% 
+    capitalize %>% 
+    factor
 targets.final$Sample.Name %<>% str_replace_all(" ", "")
 
-needs.samplenum <- str_split(targets.final$Sample.Name, "_") %>% llply(length) %>% reduce(c) %>% laply(`==`, 2) %>% which
+needs.samplenum <- str_split(targets.final$Sample.Name, "_") %>% 
+    map(length) %>% 
+    reduce(c) %>% 
+    map_lgl(equals, 2) %>% 
+    which
 targets.final[needs.samplenum,]$Sample.Name %<>% paste(targets.final[needs.samplenum,]$Sample.Num, sep = "_")
 
 targets.final$Sex %<>% toupper %>% factor
-age.missing <- is.na(targets.final$Age) & !is.na(targets.final$DOB) & !is.na(targets.final$Date.Drawn)
+age.missing <- is.na(targets.final$Age) & 
+    !is.na(targets.final$DOB) & 
+    !is.na(targets.final$Date.Drawn)
 targets.final[age.missing,]$Age <- year(targets.final[age.missing,]$Date.Drawn) - year(targets.final[age.missing,]$DOB)
 targets.final$Age[targets.final$Age < 0] <- NA
 
-targets.final$Sample.Name %<>% str_split("_") %>% llply(function(x) { return(x[-length(x)]) }) %>% llply(paste, collapse = "_") %>% reduce(c)
+targets.final$Sample.Name %<>% str_split("_") %>% 
+    map(function(x) { return(x[-length(x)]) }) %>% 
+    map(paste, collapse = "_") %>% 
+    reduce(c)
 targets.final$Sample.Name %<>% paste(targets.final$Sample.Num, str_sub(targets.final$Status, 1, 3), sep = "_") 
 
 targets.final.correct <- filter(targets.final, PIDN != "50" & PIDN != "4623")
-targets.fix <- read.xlsx("../baseline_lumi/conflicting_sample_nums_fix.xlsx")
+targets.fix <- read.xlsx("./conflicting_sample_nums_fix.xlsx")
 targets.fixed <- rbind(targets.final.correct, targets.fix)
+targets.fixed$Duration <- targets.fixed$Age - targets.fixed$Onset
 
-saveRDS.gz(targets.fixed, file = "./targets.final.rda")
-write.xlsx(targets.fixed, "./targets.final.xlsx")
+#Functional stage
+targets.stage.ucla <- read.xlsx("./ucla.patients fds may 9 17.xlsx") %>% 
+    as_tibble
+targets.stage.chop <- read.xlsx("./RNA samples functional stage may 25 2017.xlsx") %>% 
+    as_tibble
+colnames(targets.stage.chop)[ncol(targets.stage.chop)] <- "FDS"
+stage.all <- rbind(targets.stage.ucla, targets.stage.chop)
+stage.all$FDS %<>% as.numeric
+stage.join <- select(stage.all, Slide.ID, FDS)
 
-other.pidns <- filter(targets.final, grepl("2016", SCGC.Code)) %>% filter(is.na(Sex)) %>% select(PIDN, Sex:GAA2)
+targets.stages <- left_join(targets.fixed, stage.join)
+
+SaveRDSgz(targets.stages, file = "./targets.final.rda")
+write.xlsx(targets.stages, "./targets.final.xlsx")
+
+other.pidns <- filter(targets.final, grepl("2016", SCGC.Code)) %>% 
+    filter(is.na(Sex)) %>% 
+    select(PIDN, Sex:GAA2)
 write.xlsx(other.pidns, "other.pidns.xlsx")
 
-duped <- filter(targets.final, duplicated(Slide.ID)) %>% arrange(PIDN, Sample.Num)
+duped <- filter(targets.final, duplicated(Slide.ID)) %>% 
+    arrange(PIDN, Sample.Num)
 duped.filter <- unique(duped$Combined)
 targets.duped <- filter(targets.final, is.element(Combined, duped.filter))
 write.xlsx(duped, "duped.xlsx")
 
-dates.duped <- filter(targets.dates.all, is.element(Combined, duped.filter)) %>% arrange(PIDN, Sample.Num)
+dates.duped <- filter(targets.dates.all, is.element(Combined, duped.filter)) %>% 
+    arrange(PIDN, Sample.Num)
 
 temp.known <- filter(subjects.all, Status != "Unknown" & Status != "UNKNOWN")
 temp.table <- table(temp.known$Status, temp.known$Sex)
@@ -246,7 +301,7 @@ STOP
 #all.ids <- unique(c(skip.ids, baseline.ids))
 
 #targets.fix <- filter(targets.final, PIDN %in% all.ids & Sample.Num != "1r")
-#fixed.samplenums <- by(targets.fix, targets.fix$PIDN, select, Sample.Num) %>% llply(function(x){ return(1:length(x)) }) %>% reduce(c) %>% as.character #Use a proper lambda!
+#fixed.samplenums <- by(targets.fix, targets.fix$PIDN, select, Sample.Num) %>% map(function(x){ return(1:length(x)) }) %>% reduce(c) %>% as.character #Use a proper lambda!
 #targets.final %<>% arrange(PIDN)
 #targets.final[targets.final$PIDN %in% all.ids & targets.final$Sample.Num != "1r",]$Sample.Num <- fixed.samplenums
 

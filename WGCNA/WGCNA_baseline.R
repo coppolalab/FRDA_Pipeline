@@ -1,33 +1,23 @@
-#For WGCNA
 library(WGCNA)
 library(flashClust)
 enableWGCNAThreads()
 library(BayesFactor)
-#For baseline processing
 library(limma)
 library(R.utils)
 library(lumi)
 library(biomaRt)
-#Plotting
-library(ggplot2)
-library(extrafont)
-library(Cairo)
+
 library(igraph)
-library(TeachingDemos)
 library(UpSetR)
-#Reading and writing tables
-library(readr)
 library(openxlsx)
-#Functional programming
-library(magrittr)
-library(purrr)
-#Data arrangement
-library(dplyr)
-library(tidyr)
-library(broom)
+library(Cairo)
+
 #String operations
-library(stringr)
 library(tools)
+library(broom)
+library(stringr)
+library(magrittr)
+library(tidyverse)
 
 EigengeneANOVA <- function(ME.vector, trait.vector) {
     trait.df <- data.frame(Trait = trait.vector, ME = ME.vector)
@@ -37,7 +27,7 @@ EigengeneANOVA <- function(ME.vector, trait.vector) {
 
 EigengeneBayes <- function(ME.vector, trait.vector) {
     trait.df <- data.frame(Trait = trait.vector, ME = ME.vector)
-    trait.anova <- anovaBF(ME ~ Trait, data = trait.df) #%>% anova %>% tidy
+    trait.anova <- anovaBF(ME ~ Trait, data = trait.df) 
     trait.anova
 }
 
@@ -159,7 +149,7 @@ EnrichrWorkbook <- function(database, full.df, colname) {
 
 EnrichrPlot <- function(enrichr.df, filename, plot.title, plot.height = 5, plot.width = 8, color = "default") {
     enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% map(unlist) %>% map_int(length)
-    enrichr.df$Log.Bayes.Factor <- log10(enrichr.df$Bayes.Factor)
+    #enrichr.df$Log.Bayes.Factor <- log10(enrichr.df$Bayes.Factor)
     enrichr.df$Term %<>% str_replace_all("\\ \\(GO.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% str_replace_all(",.*$", "")  #Remove any thing after the left parenthesis and convert to all lower case
     enrichr.df$Format.Name <- str_c(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")")
     enrichr.df %<>% arrange(Log.Bayes.Factor)
@@ -189,8 +179,8 @@ test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'aut
 names(test) <- ls()
 unlist(test) %>% sort
 
-source("../common_functions.R")
-lumi.import <- readRDS.gz(file = "../baseline_lumi/save/rmcov.collapse.rda")
+source("../../code/common_functions.R")
+lumi.import <- ReadRDSgz(file = "../baseline_lumi/save/rmout.collapse.rda")
 
 #Calculate scale free topology measures for different values of power adjacency function
 powers <- c(c(1:10), seq(from = 12, to = 39, by = 2))
@@ -218,6 +208,7 @@ dev.off()
 
 softPower <- 6
 adjacency.expr <- adjacency(expr.collapse, power = softPower, type = "signed", corFnc = "bicor", corOptions = "maxPOutliers = 0.05")
+gc()
 
 TOM <- TOMsimilarity(adjacency.expr, verbose = 5)
 dissimilarity.TOM <- 1 - TOM
@@ -225,6 +216,7 @@ rm(TOM)
 gc()
 
 geneTree = flashClust(as.dist(dissimilarity.TOM), method = "average")
+gc()
 saveRDS.gz(geneTree, file = "./save/gene.tree.rda")
 
 CairoPDF(file = "./genecluster", height = 10, width = 15)
@@ -283,8 +275,11 @@ dev.off()
 color.values <- unique(module.colors)
 lumi.pdata <- pData(lumi.import)
 lumi.pdata$Status %<>% factor(levels = c("Control", "Carrier", "Patient"))
-anova.status <- map_dbl(ME.genes, EigengeneANOVA, lumi.pdata$Status) %>% p.adjust("fdr") %>% signif(3)
-bayes.status <- map(ME.genes, EigengeneBayes, lumi.pdata$Status) 
+
+model.cov <- model.matrix(~ Sex + Age + RIN, data = lumi.pdata) #Create model matrix of covariates to be removed
+ME.genes.rmcov <- removeBatchEffect(t(ME.genes), covariates = model.cov[,-1]) %>% 
+    t %>% data.frame #Remove the effects of covariates, with the difference in diagnoses being supplied as the design argument to preserve those group differences anova.status <- map_dbl(ME.genes.rmcov, EigengeneANOVA, lumi.pdata$Status) %>% p.adjust("fdr") %>% signif(3)
+bayes.status <- map(ME.genes.rmcov, EigengeneBayes, lumi.pdata$Status) 
 bf.status <- map(bayes.status, extractBF) %>% map_dbl(extract2, "bf") %>% map_dbl(log10)
 posterior.status <- map(bayes.status, posterior, iterations = 100000) 
 
@@ -311,10 +306,10 @@ dev.off()
 
 #Eigengene plots
 EigengeneBoxplot(ME.genes, lumi.pdata$Status, "black")
-EigengeneBoxplot(ME.genes, lumi.pdata$Status, "brown")
+EigengeneBoxplot(ME.genes, lumi.pdata$Status, "green")
 
-EstimateViolinPlot(posterior.status$MEbrown, "brown", c(-0.020, 0.025))
-EstimateViolinPlot(posterior.status$MEblack, "black", c(-0.030, 0.020))
+EstimateViolinPlot(posterior.status$MEgreen, "green", c(-0.05,0))
+EstimateViolinPlot(posterior.status$MEblack, "black", c(-0.03,0.025))
 
 #Generate network statistics
 all.degrees <- intramodularConnectivity(adjacency.expr, module.colors)
@@ -327,56 +322,42 @@ bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_
 bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
 colnames(bm.table) <- c("Symbol", "Definition")
 
-gene.info.annot <- left_join(gene.info, bm.table) %>% select(Symbol, Definition, Module:kscaled)
+gene.info.annot <- left_join(gene.info, bm.table) %>% 
+    select(Symbol, Definition, Module:kscaled) %>% 
+    filter(!duplicated(Symbol))
 
 gene.module.membership <- data.frame(bicor(expr.collapse, ME.genes, maxPOutliers = 0.05)) %>% signif(3)
-module.membership.pvalue <- data.frame(corPvalueStudent(as.matrix(gene.module.membership), nrow(expr.collapse)))
 colnames(gene.module.membership) <- str_replace(names(ME.genes),"ME", "MM.")
-colnames(module.membership.pvalue) <- str_replace(names(ME.genes),"ME", "MM.pvalue.")
 gene.module.membership$Symbol <- rownames(gene.module.membership)
-module.membership.pvalue$Symbol <- rownames(module.membership.pvalue)
+#module.membership.pvalue <- data.frame(corPvalueStudent(as.matrix(gene.module.membership), nrow(expr.collapse)))
+#colnames(module.membership.pvalue) <- str_replace(names(ME.genes),"ME", "MM.pvalue.")
+#module.membership.pvalue$Symbol <- rownames(module.membership.pvalue)
 
 module.membership <- left_join(gene.info.annot, gene.module.membership) %>% arrange(Module, desc(kscaled)) #%>% left_join(module.membership.pvalue, by = "Symbol")
 ModuleWorkbook(module.membership, "module_membership.xlsx")
-
-#PCA plots
-all.smooth <- apply(ME.genes, 2, smooth.spline, spar = 0.4) %>% map(extract2, "y")
-smooth.df <- data.frame(all.smooth)
-colnames(smooth.df) <- names(all.smooth)
-smooth.df$Gene <- as.factor(1:nrow(smooth.df))
-smooth.plot <- gather(smooth.df, Module, PCA1, -Gene)
-
-PCAPlot("all_principal_components", smooth.plot, FALSE, 10, 15)
-PCAPlot("facet_principal_components", smooth.plot, TRUE, 13, 20)
-
-#Heatmaps
-sample.ids <- factor(rownames(expr.collapse), levels = rownames(expr.collapse))
-ME.genes.plot <- mutate(data.frame(ME.genes), Sample.ID = sample.ids)
-expr.data.plot <- data.frame(t(expr.collapse), Module = module.colors)
-split(expr.data.plot, expr.data.plot$Module) %>% map(MEHeatmap, ME.genes.plot)
 
 #Enrichr
 source("../../code/GO/enrichr.R")
 
 modules.only <- select(module.membership, Symbol, Module)
 color.names <- unique(module.colors) %>% sort
-enrichr.terms <- c("GO Biological Process", "GO Molecular Function", "GO Cellular Component", "KEGG", "Reactome", "GTEx Up", "GTEx Down") 
+enrichr.terms <- c("GO Biological Process", "GO Molecular Function", "KEGG", "Reactome") 
 
 black.only <- filter(modules.only, Module == "black")
-brown.only <- filter(modules.only, Module == "brown")
+green.only <- filter(modules.only, Module == "green")
 
 black.enrichr <- map(enrichr.terms, GetHyper, black.only$Symbol, modules.only$Symbol)
 names(black.enrichr) <- enrichr.terms
 map(enrichr.terms, EnrichrWorkbook, black.enrichr, "black")
 
-brown.enrichr <- map(enrichr.terms, GetHyper, brown.only$Symbol, modules.only$Symbol)
-names(brown.enrichr) <- enrichr.terms
-map(enrichr.terms, EnrichrWorkbook, brown.enrichr, "brown")
+green.enrichr <- map(enrichr.terms, GetHyper, green.only$Symbol, modules.only$Symbol)
+names(green.enrichr) <- enrichr.terms
+map(enrichr.terms, EnrichrWorkbook, green.enrichr, "green")
 
 #Final Enrichr plots
 black.gobiol.file <- "./enrichr/black/GO Biological Process.xlsx"
 black.gobiol <- read.xlsx(black.gobiol.file) 
-GetKappaCluster(file_path_sans_ext(black.gobiol.file), black.gobiol, modules.only$Symbol)
+GetKappaCluster(file_path_sans_ext(black.gobiol.file), black.gobiol, black.only$Symbol, "Log.Bayes.Factor")
 black.gobiol$Database <- "GO BP"
 
 black.gomole.file <- "./enrichr/black/GO Molecular Function.xlsx"
@@ -385,116 +366,118 @@ black.gomole$Database <- "GO MF"
 
 black.reactome.file <- "./enrichr/black/Reactome.xlsx"
 black.reactome <- read.xlsx(black.reactome.file)
-GetKappaCluster(file_path_sans_ext(black.reactome.file), black.reactome, modules.only$Symbol)
+GetKappaCluster(file_path_sans_ext(black.reactome.file), black.reactome, black.only$Symbol, "Log.Bayes.Factor")
 black.reactome$Database <- "Reactome"
 
 black.kegg.file <- "./enrichr/black/KEGG.xlsx"
 black.kegg <- read.xlsx(black.kegg.file)
-GetKappaCluster(file_path_sans_ext(black.kegg.file), black.kegg, modules.only$Symbol)
+GetKappaCluster(file_path_sans_ext(black.kegg.file), black.kegg, black.only$Symbol, "Log.Bayes.Factor")
 black.kegg$Database <- "KEGG"
 
-black.gobiol.final <- slice(black.gobiol, c(1, 35, 16, 59, 99))
-black.kegg.final <- slice(black.kegg, 9)
-black.reactome.final <- slice(black.reactome, c(3, 2))
+black.gobiol.final <- slice(black.gobiol, c(1, 2, 13, 7))
+black.gomole.final <- slice(black.gomole, 1)
+black.kegg.final <- slice(black.kegg, c(2, 7, 11))
+black.reactome.final <- slice(black.reactome, c(2, 6))
 
-black.enrichr <- rbind(black.gobiol.final, black.kegg.final, black.reactome.final)
+black.enrichr <- rbind(black.gobiol.final, black.gomole.final, black.kegg.final, black.reactome.final)
 EnrichrPlot(black.enrichr, "black", "Black Module", plot.height = 4, plot.width = 5.5)
 
-brown.gobiol.file <- "./enrichr/brown/GO Biological Process.xlsx"
-brown.gobiol <- read.xlsx(brown.gobiol.file) 
-brown.gobiol.reduce <- slice(brown.gobiol, 1:200)
-GetKappaCluster(file_path_sans_ext(brown.gobiol.file), brown.gobiol.reduce, modules.only$Symbol)
-brown.gobiol$Database <- "GO BP"
+green.gobiol.file <- "./enrichr/green/GO Biological Process.xlsx"
+green.gobiol <- read.xlsx(green.gobiol.file) 
+#green.gobiol.reduce <- slice(green.gobiol, 1:200)
+GetKappaCluster(file_path_sans_ext(green.gobiol.file), green.gobiol, green.only$Symbol, "Log.Bayes.Factor")
+green.gobiol$Database <- "GO BP"
 
-brown.gomole.file <- "./enrichr/brown/GO Molecular Function.xlsx"
-brown.gomole <- read.xlsx(brown.gomole.file)
-GetKappaCluster(file_path_sans_ext(brown.gomole.file), brown.gomole, modules.only$Symbol)
-brown.gomole$Database <- "GO MF"
+green.gomole.file <- "./enrichr/green/GO Molecular Function.xlsx"
+green.gomole <- read.xlsx(green.gomole.file)
+GetKappaCluster(file_path_sans_ext(green.gomole.file), green.gomole, green.only$Symbol, "Log.Bayes.Factor")
+green.gomole$Database <- "GO MF"
 
-brown.reactome.file <- "./enrichr/brown/Reactome.xlsx"
-brown.reactome <- read.xlsx(brown.reactome.file)
-GetKappaCluster(file_path_sans_ext(brown.reactome.file), brown.reactome, modules.only$Symbol)
-brown.reactome$Database <- "Reactome"
+green.reactome.file <- "./enrichr/green/Reactome.xlsx"
+green.reactome <- read.xlsx(green.reactome.file)
+GetKappaCluster(file_path_sans_ext(green.reactome.file), green.reactome, green.only$Symbol, "Log.Bayes.Factor")
+green.reactome$Database <- "Reactome"
 
-brown.kegg.file <- "./enrichr/brown/KEGG.xlsx"
-brown.kegg <- read.xlsx(brown.kegg.file)
-GetKappaCluster(file_path_sans_ext(brown.kegg.file), brown.kegg, modules.only$Symbol)
-brown.kegg$Database <- "KEGG"
+green.kegg.file <- "./enrichr/green/KEGG.xlsx"
+green.kegg <- read.xlsx(green.kegg.file)
+#GetKappaCluster(file_path_sans_ext(green.kegg.file), green.kegg, green.only$Symbol, "Log.Bayes.Factor")
+green.kegg$Database <- "KEGG"
 
-brown.gobiol.final <- slice(brown.gobiol, c(4, 41, 5, 25, 62, 131, 9, 2))
-brown.reactome.final <- slice(brown.reactome, c(13, 59))
+green.gobiol.final <- slice(green.gobiol, c(1, 7, 13))
+green.gomole.final <- slice(green.gomole, 4)
+green.reactome.final <- slice(green.reactome, c(2, 3))
 
-brown.enrichr <- rbind(brown.gobiol.final, brown.reactome.final)
-EnrichrPlot(brown.enrichr, "brown", "Brown Module", plot.height = 4, plot.width = 5.5, color = "brown")
+green.enrichr <- rbind(green.gobiol.final, green.gomole.final, green.reactome.final)
+EnrichrPlot(green.enrichr, "green", "green Module", plot.height = 4, plot.width = 5.5, color = "green")
 
 #PPI for whole module
-black.ppi.all <- GetPPI(black.only$Symbol)
-black.all.graph <- graph_from_edgelist(as.matrix(black.ppi.all))
-black.incident <- map(V(black.all.graph), incident, graph = black.all.graph) %>% map_int(length)
+#black.ppi.all <- GetPPI(black.only$Symbol)
+#black.all.graph <- graph_from_edgelist(as.matrix(black.ppi.all))
+#black.incident <- map(V(black.all.graph), incident, graph = black.all.graph) %>% map_int(length)
 
-brown.ppi.all <- GetPPI(brown.only$Symbol)
-brown.all.graph <- graph_from_edgelist(as.matrix(brown.ppi.all))
-brown.incident <- map(V(brown.all.graph), incident, graph = brown.all.graph) %>% map_int(length)
+#brown.ppi.all <- GetPPI(brown.only$Symbol)
+#brown.all.graph <- graph_from_edgelist(as.matrix(brown.ppi.all))
+#brown.incident <- map(V(brown.all.graph), incident, graph = brown.all.graph) %>% map_int(length)
 
-#Get genes in GO categories
-brown.genes <- map(brown.enrichr$Genes, str_split, ",") %>% map(extract2, 1) 
-brown.symbols <- reduce(brown.genes, c) %>% unique 
+##Get genes in GO categories
+#brown.genes <- map(brown.enrichr$Genes, str_split, ",") %>% map(extract2, 1) 
+#brown.symbols <- reduce(brown.genes, c) %>% unique 
 
-black.genes <- map(black.enrichr$Genes, str_split, ",") %>% map(extract2, 1) 
-black.symbols <- reduce(black.genes, c) %>% unique 
+#black.genes <- map(black.enrichr$Genes, str_split, ",") %>% map(extract2, 1) 
+#black.symbols <- reduce(black.genes, c) %>% unique 
 
-#PPI
-brown.ppi <-  map(brown.genes, GetPPI)
-black.ppi <-  map(black.genes, GetPPI)
+##PPI
+#brown.ppi <-  map(brown.genes, GetPPI)
+#black.ppi <-  map(black.genes, GetPPI)
 
-PlotPPI(adjacency.expr, brown.enrichr$Genes[[4]], brown.ppi[[4]], "brown_test", plot.width = 20, plot.height = 20, vertex.size = 15)
+#PlotPPI(adjacency.expr, brown.enrichr$Genes[[4]], brown.ppi[[4]], "brown_test", plot.width = 20, plot.height = 20, vertex.size = 15)
 
-#Kscaled
-black.kscaled <- map(black.genes, GetKscaled, module.membership)
-black.kscaled.df <- reduce(black.kscaled, rbind) %>% distinct
-black.kscaled.df %<>% slice(match(black.symbols, black.kscaled.df$Symbol))
+##Kscaled
+#black.kscaled <- map(black.genes, GetKscaled, module.membership)
+#black.kscaled.df <- reduce(black.kscaled, rbind) %>% distinct
+#black.kscaled.df %<>% slice(match(black.symbols, black.kscaled.df$Symbol))
 
-brown.kscaled <- map(brown.genes, GetKscaled, module.membership)
-brown.kscaled.df <- reduce(brown.kscaled, rbind) %>% distinct
-brown.kscaled.df %<>% slice(match(brown.symbols, brown.kscaled.df$Symbol))
+#brown.kscaled <- map(brown.genes, GetKscaled, module.membership)
+#brown.kscaled.df <- reduce(brown.kscaled, rbind) %>% distinct
+#brown.kscaled.df %<>% slice(match(brown.symbols, brown.kscaled.df$Symbol))
 
-#GO Overlap
-black.intersect <- fromList(black.genes) %>%  data.frame 
-black.weighted <- apply(black.intersect, 2, multiply_by, black.kscaled.df$kscaled) %>% t %>% data.frame
-colnames(black.weighted) <- black.symbols
-black.weighted$Term <- str_replace_all(black.enrichr$Term, "\\ \\(GO.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% str_replace_all(",.*$", "")  
-black.weighted$Format.Name <- str_c(black.enrichr$Database, ": ", black.weighted$Term)
-black.weighted$Format.Name %<>% factor(levels = black.weighted$Format.Name)
-black.plot <- gather(black.weighted, Gene, Kscaled, -Format.Name, -Term)
-black.plot$Gene %<>% factor(levels = black.symbols)
+##GO Overlap
+#black.intersect <- fromList(black.genes) %>%  data.frame 
+#black.weighted <- apply(black.intersect, 2, multiply_by, black.kscaled.df$kscaled) %>% t %>% data.frame
+#colnames(black.weighted) <- black.symbols
+#black.weighted$Term <- str_replace_all(black.enrichr$Term, "\\ \\(GO.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% str_replace_all(",.*$", "")  
+#black.weighted$Format.Name <- str_c(black.enrichr$Database, ": ", black.weighted$Term)
+#black.weighted$Format.Name %<>% factor(levels = black.weighted$Format.Name)
+#black.plot <- gather(black.weighted, Gene, Kscaled, -Format.Name, -Term)
+#black.plot$Gene %<>% factor(levels = black.symbols)
 
-CairoPDF("black.heatmap", width = 8, height = 30)
-p <- ggplot(black.plot, aes(Format.Name, Gene, fill = Kscaled)) + geom_raster() + theme_bw()
-p <- p + theme(axis.title.x = element_blank(), axis.title.y = element_blank())
-p <- p + theme(axis.ticks.x = element_blank(), axis.ticks.y = element_blank())
-p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(panel.background = element_blank(), panel.border = element_blank())
-p <- p + theme(plot.background = element_blank())
-p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
-print(p)
-dev.off()
+#CairoPDF("black.heatmap", width = 8, height = 30)
+#p <- ggplot(black.plot, aes(Format.Name, Gene, fill = Kscaled)) + geom_raster() + theme_bw()
+#p <- p + theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+#p <- p + theme(axis.ticks.x = element_blank(), axis.ticks.y = element_blank())
+#p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#p <- p + theme(panel.background = element_blank(), panel.border = element_blank())
+#p <- p + theme(plot.background = element_blank())
+#p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+#print(p)
+#dev.off()
 
-brown.intersect <- fromList(brown.genes) %>%  data.frame 
-brown.weighted <- apply(brown.intersect, 2, multiply_by, brown.kscaled.df$kscaled) %>% t %>% data.frame
-colnames(brown.weighted) <- brown.symbols
-brown.weighted$Term <- str_replace_all(brown.enrichr$Term, "\\ \\(GO.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% str_replace_all(",.*$", "")  
-brown.weighted$Format.Name <- str_c(brown.enrichr$Database, ": ", brown.weighted$Term)
-brown.weighted$Format.Name %<>% factor(levels = brown.weighted$Format.Name)
-brown.plot <- gather(brown.weighted, Gene, Kscaled, -Format.Name, -Term)
-brown.plot$Gene %<>% factor(levels = brown.symbols)
+#brown.intersect <- fromList(brown.genes) %>%  data.frame 
+#brown.weighted <- apply(brown.intersect, 2, multiply_by, brown.kscaled.df$kscaled) %>% t %>% data.frame
+#colnames(brown.weighted) <- brown.symbols
+#brown.weighted$Term <- str_replace_all(brown.enrichr$Term, "\\ \\(GO.*$", "") %>% str_replace_all("\\_Homo.*$", "") %>% str_replace_all(",.*$", "")  
+#brown.weighted$Format.Name <- str_c(brown.enrichr$Database, ": ", brown.weighted$Term)
+#brown.weighted$Format.Name %<>% factor(levels = brown.weighted$Format.Name)
+#brown.plot <- gather(brown.weighted, Gene, Kscaled, -Format.Name, -Term)
+#brown.plot$Gene %<>% factor(levels = brown.symbols)
 
-CairoPDF("brown.heatmap", width = 8, height = 30)
-p <- ggplot(brown.plot, aes(Format.Name, Gene, fill = Kscaled)) + geom_raster() + theme_bw()
-p <- p + theme(axis.title.x = element_blank(), axis.title.y = element_blank())
-p <- p + theme(axis.ticks.x = element_blank(), axis.ticks.y = element_blank())
-p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(panel.background = element_blank(), panel.border = element_blank())
-p <- p + theme(plot.background = element_blank())
-p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
-print(p)
-dev.off()
+#CairoPDF("brown.heatmap", width = 8, height = 30)
+#p <- ggplot(brown.plot, aes(Format.Name, Gene, fill = Kscaled)) + geom_raster() + theme_bw()
+#p <- p + theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+#p <- p + theme(axis.ticks.x = element_blank(), axis.ticks.y = element_blank())
+#p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#p <- p + theme(panel.background = element_blank(), panel.border = element_blank())
+#p <- p + theme(plot.background = element_blank())
+#p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+#print(p)
+#dev.off()

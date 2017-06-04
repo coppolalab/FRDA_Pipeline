@@ -2,6 +2,9 @@ library(caret)
 library(glmnet)
 library(biomaRt)
 library(lumi)
+library(WGCNA)
+library(Metrics)
+library(boot)
 
 library(openxlsx)
 library(Cairo)
@@ -55,26 +58,92 @@ test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'aut
 names(test) <- ls()
 unlist(test) %>% sort
 
-lumi.cleaned <- ReadRDSgz("../WGCNA_GAA/save/export.lumi.rda")
-#skew.filter <- ReadRDSgz("../WGCNA_GAA/save/skew.filter.rda")
-#lumi.cleaned <- lumi.cleaned[skew.filter$Symbol,]
-GAADensityPlot(lumi.cleaned$GAA1, "gaa_density")
+lumi.import <- ReadRDSgz("../WGCNA_GAA/save/export.lumi.rda")
+#lumi.import <- lumi.import[,lumi.import$FDS != 6 & lumi.import$FDS != 1]
+
+all.model <- model.matrix( ~ Age + RIN, pData(lumi.import))[,-1] %>% data.frame
+all.rmcov <- removeBatchEffect(lumi.import, covariates = all.model) %>% t
+#all.rmcov <- empiricalBayesLM(t(exprs(lumi.import)), removedCovariates = all.model) %>%
+    #extract2("adjustedData") 
 
 #SVM
 svm.fitcontrol <- trainControl(method = "boot632", verboseIter = TRUE, number = 25, savePredictions = TRUE)
+ranger.fitcontrol <- trainControl(method = "boot632", verboseIter = TRUE, number = 25, allowParallel = FALSE, savePredictions = TRUE)
 
-gaa.enet <- glmnet(t(exprs(lumi.cleaned)), lumi.cleaned$GAA1, "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive", standardize.response = TRUE)
-gaa.enet.stand <- glmnet(t(exprs(lumi.cleaned)), scale(lumi.cleaned$GAA1), "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive")
-gaa.enet.coef <- coef(gaa.enet.stand)[-1,ncol(gaa.enet$beta)]
-gaa.enet.df <- tibble(Symbol = names(gaa.enet.coef), Coefficient = signif(gaa.enet.coef, 3)) %>% arrange(desc(abs(Coefficient)))
+set.seed(12345)
+gaa.enet <- glmnet(all.rmcov, as.vector(scale(lumi.import$FDS)), "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive")
+gaa.enet.coef <- coef(gaa.enet)[-1,ncol(gaa.enet$beta)]
+gaa.enet.df <- tibble(Symbol = names(gaa.enet.coef), Coefficient = signif(gaa.enet.coef, 3)) %>% arrange(desc(abs(Coefficient))
+full.predict <- predict(gaa.enet, all.rmcov)
+predict.plot <- data.frame(Original = scale(lumi.import$FDS), Predicted = full.predict[,ncol(full.predict)])
+full.rmse <- rmse(full.predict[,ncol(full.predict)], scale(lumi.import$FDS))
+lm(full.predict[,ncol(full.predict)] ~ scale(lumi.import$FDS)) %>% summary %>% str
 
-lumi.top <- lumi.cleaned[gaa.enet.coef != 0,]
-svm.train <- train(x = t(exprs(lumi.top)), y = lumi.top$GAA1, preProcess = c("center", "scale"), metric = "RMSE", method = "svmPoly", trControl = svm.fitcontrol) 
+p <- ggplot(predict.plot, aes(x = Original, y = Predicted)) + 
+    geom_jitter() + 
+    stat_smooth(method = "loess") + 
+    theme_bw() + 
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank())
+
+CairoPDF("glm.pred.original", height = 4, width = 4)
+print(p)
+dev.off()
+
+FitGLM <- function(expr.matrix, sample.index, y.vector) {
+    boot.sample <- expr.matrix[sample.index,]
+    print("Fitting penalized regression model...")
+    gaa.enet <- glmnet(boot.sample, as.vector(scale(y.vector)), "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive")
+    print("..model finished")
+    predict.boot <- predict(gaa.enet, boot.sample)
+    boot.rmse <- rmse(predict.boot[,ncol(predict.boot)], scale(y.vector))
+    boot.rsquared <- lm(predict.boot[,ncol(predict.boot)] ~ scale(y.vector)) %>% 
+        summary %>% extract2("r.squared")
+    c(RMSE = boot.rmse, Rsquared = boot.rsquared)
+}
+
+boot.test <- boot(all.rmcov, FitGLM, R = 25, y.vector = lumi.import$FDS)
+all.rmcov.df <- data.frame(FDS.scaled = scale(lumi.import$FDS), all.rmcov)
+h2o.test <- h2o.deeplearning(y = "FDS.scaled", training_frame = all.rmcov.df)
+
+lumi.top <- all.rmcov[,gaa.enet.coef != 0]
+set.seed(12345)
+svm.train <- train(x = lumi.top, y = as.vector(scale(lumi.import$FDS)), 
+                   preProcess = c("center", "scale"), metric = "RMSE", 
+                   method = "svmPoly", trControl = svm.fitcontrol) 
+glm.train <- train(x = all.rmcov, y = as.vector(scale(lumi.import$FDS)), 
+                   preProcess = c("center", "scale"), metric = "RMSE", 
+                   method = "glmnet", family = "gaussian", nlambda = 10000,
+                   tuneGrid = data.frame(alpha = 0.5, lambda = 0.0163), trControl = svm.fitcontrol) 
+#ranger.train <- train(x = all.rmcov, y = lumi.import$FDS, preProcess = c("center", "scale"), metric = "RMSE", method = "ranger", trControl = ranger.fitcontrol, num.trees = 1000, tuneGrid = data.frame(mtry = nrow(lumi.top)))
 svm.preds <- svm.train$pred
+glm.preds <- glm.train$pred
 
-p <- ggplot(svm.preds, aes(x = obs, y = pred)) + geom_point() + facet_wrap( ~ Resample) + stat_smooth()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+temp <- predict(glm.train$finalModel, all.rmcov)
+full.rmse <- rmse(temp[,ncol(temp)], scale(lumi.import$FDS))
+lm(temp[,ncol(temp)] ~ scale(lumi.import$FDS)) %>% summary
+
+p <- ggplot(svm.preds, aes(x = obs, y = pred)) + 
+    geom_jitter() + 
+    facet_wrap( ~ Resample) + 
+    stat_smooth(method = "loess") + 
+    theme_bw() + 
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank())
+
 CairoPDF("svm.poly.preds", height = 30, width = 40)
+print(p)
+dev.off()
+
+p <- ggplot(glm.preds, aes(x = obs, y = pred)) + 
+    geom_jitter() + 
+    facet_wrap( ~ Resample) + 
+    stat_smooth(method = "loess") + 
+    theme_bw() + 
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank())
+
+CairoPDF("glm.preds", height = 30, width = 40)
 print(p)
 dev.off()
 
@@ -114,11 +183,12 @@ dev.off()
 regressed.genes <- read.xlsx("../WGCNA_GAA/ebam.annot.xlsx")
 regressed.sig <- filter(regressed.genes, Posterior > 0.9)
 
-bf.genes <- read.xlsx("../WGCNA_GAA/bf.annot.xlsx")
-bf.sig <- filter(bf.genes, Bayes.Factor > 3)
+bf.genes <- read.xlsx("../WGCNA_GAA/bf.fds.xlsx") %>% as_tibble
+bf.sig <- filter(bf.genes, Log.Bayes.Factor > 0.5 & Symbol %in% colnames(lumi.top)) %>% 
+    arrange(desc(abs(Median)))
 
 intersect(regressed.sig$Symbol, featureNames(lumi.top))
-intersect(bf.sig$Symbol, featureNames(lumi.top))
+intersect(bf.sig$Symbol, colnames(lumi.top))
 
 STOP
 #registerDoMC(cores = 6)
