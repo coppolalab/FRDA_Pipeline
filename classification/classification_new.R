@@ -23,7 +23,6 @@ ClassifierWorkbook <- function(rank.table, filename) {
     addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
     writeDataTable(wb = wb, sheet = 1, x = rank.table)
     conditionalFormatting(wb, 1, cols = score.cols, rows = 1:nrow(rank.table), style = c("#63BE7B", "white", "red"), type = "colourScale")
-    #conditionalFormatting(wb, 1, cols = logfc.cols, rows = 1:nrow(dataset), style = c("#63BE7B", "white", "red"), type = "colourScale")
     setColWidths(wb, 1, cols = 1, widths = "auto")
     setColWidths(wb, 1, cols = 2, widths = 45)
     setColWidths(wb, 1, cols = 3:ncol(rank.table), widths = "auto")
@@ -34,84 +33,84 @@ ClassifierWorkbook <- function(rank.table, filename) {
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-PCAPlot <- function(plot.df, color.column, scale.name, filename){
-    p <- ggplot(data = plot.df, aes_string(x = "PC1", y = "PC2", col = color.column)) + geom_point()
-    p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.background = element_blank(), legend.background = element_blank())
-    p <- p + theme(panel.border = element_rect(color = "black", size = 1))
-    p <- p + scale_color_discrete(name = scale.name, labels = R.utils:::capitalize(levels(plot.df[[color.column]])))
-    CairoPDF(filename, width = 8, height = 6, bg = "transparent")
-    print(p)
-    dev.off()
-}
-
-#source("../common_functions.R")
-
-pca.collapse <- ReadRDSgz("../baseline_lumi/save/pca.collapse.rda")
-pco.collapse <- ReadRDSgz("../baseline_lumi/save/pco.collapse.rda") 
-cc.collapse <- ReadRDSgz("../baseline_lumi/save/cc.collapse.rda")
+source("../common_functions.R")
+lumi.import <- ReadRDSgz("../baseline_lumi/save/rmcov.lumi.rda")
 
 #Create trainControl object
 svm.fitcontrol <- trainControl(method = "boot632", verboseIter = TRUE, number = 25, savePredictions = TRUE)
 
-pco.lasso <- glmnet(t(exprs(pco.collapse)), pco.collapse$Status, "binomial", nlambda = 1000, alpha = 1)
-pco.lasso.coef <- coef(pco.lasso)[-1,1000]
-pco.lasso.df <- data.frame(Symbol = names(pco.lasso.coef), Coefficient.pco = pco.lasso.coef) %>% arrange(desc(abs(Coefficient.pco)))
+set.seed(12345)
+status.lasso <- glmnet(t(exprs(lumi.import)), lumi.import$Status, "multinomial", type.multinomial = "grouped", nlambda = 1000, alpha = 1)
+status.lasso.patient <- coef(status.lasso)$Patient[-1,1000]
+status.lasso.carrier <- coef(status.lasso)$Carrier[-1,1000]
+status.lasso.control <- coef(status.lasso)$Control[-1,1000]
+status.lasso.df <- tibble(Symbol = names(status.lasso.coef), 
+                          Coefficient.Patient = status.lasso.patient,
+                          Coefficient.Carrier = status.lasso.carrier,
+                          Coefficient.Control = status.lasso.control) %>% 
+                   arrange(desc(abs(Coefficient.Patient)))
 
-pco.collapse.top <- pco.collapse[pco.lasso.coef !=0, ]
-svm.pco.final <- train(x = t(exprs(pco.collapse.top)), y = droplevels(factor(pco.collapse.top$Status)), preProcess = c("center", "scale"), metric = "Kappa", method = "svmLinear", trControl = svm.fitcontrol)
+lumi.import.top <- lumi.import[status.lasso.patient !=0, ]
+set.seed(12345)
+svm.final <- train(x = t(exprs(lumi.import.top)), y = droplevels(factor(lumi.import.top$Status)), 
+                       preProcess = c("center", "scale"), metric = "Kappa", method = "svmLinear", trControl = svm.fitcontrol)
 
-lumi.pco.top5 <- data.frame(Status = pco.collapse$Status, t(exprs(pco.collapse[pco.lasso.df$Symbol[1:5],]))) %>% gather(Gene, Expression, -Status)
-lumi.pco.top5$Gene %<>% factor(levels = pco.lasso.df$Symbol[1:5])
-top5.plot <- ggplot(lumi.pco.top5, aes(x = Expression, color = Status)) + geom_density()
-top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free") + scale_color_manual(values = c("red", "blue"))
-CairoPDF("svm.pco.top5", width = 20, height = 5)
-print(top5.plot)
-dev.off()
-
-pca.lasso <- glmnet(t(exprs(pca.collapse)), pca.collapse$Status, "binomial", nlambda = 1000, alpha = 1)
-pca.lasso.coef <- coef(pca.lasso)[-1,1000]
-pca.lasso.df <- data.frame(Symbol = names(pca.lasso.coef), Coefficient.pca = pca.lasso.coef) %>% arrange(desc(abs(Coefficient.pca)))
-
-pca.collapse.top <- pca.collapse[pca.lasso.coef != 0,]
-svm.pca.final <- train(x = data.frame(t(exprs(pca.collapse.top))), y = droplevels(factor(pca.collapse.top$Status)), preProcess = c("center", "scale"), metric = "Kappa", method = "svmLinear", trControl = svm.fitcontrol)
-
-pca.collapse.top5 <- data.frame(Status = pca.collapse$Status, t(exprs(pca.collapse[pca.lasso.df$Symbol[1:5],]))) %>% gather(Gene, Expression, -Status)
-pca.collapse.top5$Gene %<>% factor(levels = str_replace(pca.lasso.df$Symbol[1:5], "-", "."))
-top5.plot <- ggplot(pca.collapse.top5, aes(x = Expression, color = Status)) + geom_density()
-top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free") + scale_color_manual(values = c("darkgreen", "blue"))
-CairoPDF("svm.pca.top5", width = 20, height = 5)
-print(top5.plot)
-dev.off()
-
-cc.collapse$Status %<>% factor(levels = c("Control", "Carrier"))
-cc.lasso <- glmnet(t(exprs(cc.collapse)), cc.collapse$Status, "binomial", nlambda = 1000, alpha = 1)
-cc.lasso.coef <- coef(cc.lasso)[-1,1000] 
-cc.lasso.df <- data.frame(Symbol = names(cc.lasso.coef), Coefficient.cc = cc.lasso.coef) %>% arrange(desc(abs(Coefficient.cc)))
-
-cc.collapse.top <- cc.collapse[cc.lasso.coef != 0,]
-svm.cc.final <- train(x = t(exprs(cc.collapse.top)), y = droplevels(factor(cc.collapse.top$Status)), preProcess = c("center", "scale"), metric = "Kappa", method = "svmLinear", trControl = svm.fitcontrol)
-
-cc.collapse.top5 <- data.frame(Status = cc.collapse$Status, t(exprs(cc.collapse[cc.lasso.df$Symbol[1:5],]))) %>% gather(Gene, Expression, -Status)
-cc.collapse.top5$Gene %<>% factor(levels = str_replace(cc.lasso.df$Symbol[1:5], "-", "."))
-top5.plot <- ggplot(cc.collapse.top5, aes(x = Expression, color = Status)) + geom_density()
-top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free") + scale_color_manual(values = c("darkgreen", "red"))
-CairoPDF("svm.cc.top5", width = 20, height = 5)
-print(top5.plot)
-dev.off()
-
-lasso.table <- left_join(pco.lasso.df, pca.lasso.df) %>% 
-    left_join(cc.lasso.df) %>% 
-    as_tibble %>%
-    mutate_if(is.numeric, signif, digits = 3)
 ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(lasso.table$Symbol), mart = ensembl)
+bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', 
+                  values = as.character(status.lasso.df$Symbol), mart = ensembl)
 bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
 colnames(bm.table) <- c("Symbol", "Definition")
-lasso.annot <- left_join(lasso.table, bm.table) %>% dplyr::select(Symbol, Definition, dplyr::contains("Coefficient")) 
+lasso.annot <- left_join(status.lasso.df, bm.table) %>% 
+    dplyr::select(Symbol, Definition, dplyr::contains("Coefficient")) 
 ClassifierWorkbook(lasso.annot, "lasso.table.xlsx")
+STOP
+
+#ranger.final <- train(x = data.frame(t(exprs(lumi.import.top))), y = droplevels(factor(lumi.import.top$Status)), 
+                      #preProcess = c("center", "scale"), metric = "Kappa", method = "ranger", trControl = ranger.fitcontrol, 
+                      #num.trees = 1000, tuneGrid = data.frame(mtry = nrow(lumi.import.top)))
+#ranger.fitcontrol <- trainControl(method = "boot632", verboseIter = TRUE, number = 25, allowParallel = FALSE, savePredictions = TRUE)
+#lumi.pco.top5 <- data.frame(Status = pco.collapse$Status, t(exprs(pco.collapse[pco.lasso.df$Symbol[1:5],]))) %>% gather(Gene, Expression, -Status)
+#lumi.pco.top5$Gene %<>% factor(levels = pco.lasso.df$Symbol[1:5])
+#top5.plot <- ggplot(lumi.pco.top5, aes(x = Expression, color = Status)) + geom_density()
+#top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free") + scale_color_manual(values = c("red", "blue"))
+#CairoPDF("svm.pco.top5", width = 20, height = 5)
+#print(top5.plot)
+#dev.off()
+
+#pca.lasso <- glmnet(t(exprs(pca.collapse)), pca.collapse$Status, "binomial", nlambda = 1000, alpha = 1)
+#pca.lasso.coef <- coef(pca.lasso)[-1,1000]
+#pca.lasso.df <- data.frame(Symbol = names(pca.lasso.coef), Coefficient.pca = pca.lasso.coef) %>% arrange(desc(abs(Coefficient.pca)))
+
+#pca.collapse.top <- pca.collapse[pca.lasso.coef != 0,]
+#svm.pca.final <- train(x = data.frame(t(exprs(pca.collapse.top))), y = droplevels(factor(pca.collapse.top$Status)), preProcess = c("center", "scale"), metric = "Kappa", method = "svmLinear", trControl = svm.fitcontrol)
+
+#pca.collapse.top5 <- data.frame(Status = pca.collapse$Status, t(exprs(pca.collapse[pca.lasso.df$Symbol[1:5],]))) %>% gather(Gene, Expression, -Status)
+#pca.collapse.top5$Gene %<>% factor(levels = str_replace(pca.lasso.df$Symbol[1:5], "-", "."))
+#top5.plot <- ggplot(pca.collapse.top5, aes(x = Expression, color = Status)) + geom_density()
+#top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free") + scale_color_manual(values = c("darkgreen", "blue"))
+#CairoPDF("svm.pca.top5", width = 20, height = 5)
+#print(top5.plot)
+#dev.off()
+
+#cc.collapse$Status %<>% factor(levels = c("Control", "Carrier"))
+#cc.lasso <- glmnet(t(exprs(cc.collapse)), cc.collapse$Status, "binomial", nlambda = 1000, alpha = 1)
+#cc.lasso.coef <- coef(cc.lasso)[-1,1000] 
+#cc.lasso.df <- data.frame(Symbol = names(cc.lasso.coef), Coefficient.cc = cc.lasso.coef) %>% arrange(desc(abs(Coefficient.cc)))
+
+#cc.collapse.top <- cc.collapse[cc.lasso.coef != 0,]
+#svm.cc.final <- train(x = t(exprs(cc.collapse.top)), y = droplevels(factor(cc.collapse.top$Status)), preProcess = c("center", "scale"), metric = "Kappa", method = "svmLinear", trControl = svm.fitcontrol)
+
+#cc.collapse.top5 <- data.frame(Status = cc.collapse$Status, t(exprs(cc.collapse[cc.lasso.df$Symbol[1:5],]))) %>% gather(Gene, Expression, -Status)
+#cc.collapse.top5$Gene %<>% factor(levels = str_replace(cc.lasso.df$Symbol[1:5], "-", "."))
+#top5.plot <- ggplot(cc.collapse.top5, aes(x = Expression, color = Status)) + geom_density()
+#top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free") + scale_color_manual(values = c("darkgreen", "red"))
+#CairoPDF("svm.cc.top5", width = 20, height = 5)
+#print(top5.plot)
+#dev.off()
+
 
 objects.size <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(objects.size) <- ls()

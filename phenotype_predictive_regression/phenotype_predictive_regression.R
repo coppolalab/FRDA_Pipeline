@@ -17,24 +17,6 @@ library(tidyverse)
 
 source("../common_functions.R")
 
-GAADensityPlot <- function(gaa.vector, filename) {
-    gaa.density <- density(gaa.vector) #compute density kernel of GAA distribution
-    density.df <- data.frame(x = gaa.density$x, y = gaa.density$y) #extract density coordinates and put in data frame
-    gaa.summary <- summary(gaa.vector) %>% tidy #get summary info
-    gaa.quartiles <- unlist(gaa.summary[c(2,3,5)]) #extract quartiles 1 and 3 and median
-    density.df$quant <- factor(findInterval(density.df$x, gaa.quartiles)) #assign each x-coordinate of density to the correct quartile
-    names(gaa.quartiles) <- gaa.quartiles #name the quartiles vector the same as its contents, because ggplot is weird like that
-
-    #Explanation of this plot: by supplying x and y, geom_line prints the lines at the correct vertical heights and x locations - used instead of vline
-    #geom_ribbon is like density except it seems to support having multiple colors 
-    
-    p <- ggplot(density.df, aes(x, y)) + geom_line() + geom_ribbon(aes(ymin = 0, ymax = y, fill = quant)) 
-    p <- p + scale_x_continuous(breaks = gaa.quartiles) + scale_fill_brewer(palette = "Set1", guide = "none")
-    p <- p + xlab("Repeat Length") + ylab("Density")
-    CairoPDF(filename, width = 6, height = 6)
-    print(p)
-    dev.off()
-}
 
 RegressionWorkbook <- function(rank.table, filename) {
     score.key <- colnames(rank.table) %>% str_detect("Coefficient") 
@@ -58,70 +40,22 @@ test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'aut
 names(test) <- ls()
 unlist(test) %>% sort
 
-lumi.import <- ReadRDSgz("../WGCNA_GAA/save/export.lumi.rda")
-#lumi.import <- lumi.import[,lumi.import$FDS != 6 & lumi.import$FDS != 1]
-
-all.model <- model.matrix( ~ Age + RIN, pData(lumi.import))[,-1] %>% data.frame
-all.rmcov <- removeBatchEffect(lumi.import, covariates = all.model) %>% t
-#all.rmcov <- empiricalBayesLM(t(exprs(lumi.import)), removedCovariates = all.model) %>%
-    #extract2("adjustedData") 
+lumi.import <- ReadRDSgz("../WGCNA_GAA/save/rmcov.lumi.rda")
 
 #SVM
 svm.fitcontrol <- trainControl(method = "boot632", verboseIter = TRUE, number = 25, savePredictions = TRUE)
-ranger.fitcontrol <- trainControl(method = "boot632", verboseIter = TRUE, number = 25, allowParallel = FALSE, savePredictions = TRUE)
 
 set.seed(12345)
-gaa.enet <- glmnet(all.rmcov, as.vector(scale(lumi.import$FDS)), "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive")
+gaa.enet <- glmnet(t(exprs(lumi.import)), as.vector(lumi.import$FDS), "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive")
 gaa.enet.coef <- coef(gaa.enet)[-1,ncol(gaa.enet$beta)]
-gaa.enet.df <- tibble(Symbol = names(gaa.enet.coef), Coefficient = signif(gaa.enet.coef, 3)) %>% arrange(desc(abs(Coefficient))
-full.predict <- predict(gaa.enet, all.rmcov)
-predict.plot <- data.frame(Original = scale(lumi.import$FDS), Predicted = full.predict[,ncol(full.predict)])
-full.rmse <- rmse(full.predict[,ncol(full.predict)], scale(lumi.import$FDS))
-lm(full.predict[,ncol(full.predict)] ~ scale(lumi.import$FDS)) %>% summary %>% str
+gaa.enet.df <- tibble(Symbol = names(gaa.enet.coef), Coefficient = signif(gaa.enet.coef, 3)) %>% arrange(desc(abs(Coefficient)))
 
-p <- ggplot(predict.plot, aes(x = Original, y = Predicted)) + 
-    geom_jitter() + 
-    stat_smooth(method = "loess") + 
-    theme_bw() + 
-    theme(panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank())
-
-CairoPDF("glm.pred.original", height = 4, width = 4)
-print(p)
-dev.off()
-
-FitGLM <- function(expr.matrix, sample.index, y.vector) {
-    boot.sample <- expr.matrix[sample.index,]
-    print("Fitting penalized regression model...")
-    gaa.enet <- glmnet(boot.sample, as.vector(scale(y.vector)), "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive")
-    print("..model finished")
-    predict.boot <- predict(gaa.enet, boot.sample)
-    boot.rmse <- rmse(predict.boot[,ncol(predict.boot)], scale(y.vector))
-    boot.rsquared <- lm(predict.boot[,ncol(predict.boot)] ~ scale(y.vector)) %>% 
-        summary %>% extract2("r.squared")
-    c(RMSE = boot.rmse, Rsquared = boot.rsquared)
-}
-
-boot.test <- boot(all.rmcov, FitGLM, R = 25, y.vector = lumi.import$FDS)
-all.rmcov.df <- data.frame(FDS.scaled = scale(lumi.import$FDS), all.rmcov)
-h2o.test <- h2o.deeplearning(y = "FDS.scaled", training_frame = all.rmcov.df)
-
-lumi.top <- all.rmcov[,gaa.enet.coef != 0]
+lumi.top <- lumi.import[gaa.enet.coef != 0,]
 set.seed(12345)
-svm.train <- train(x = lumi.top, y = as.vector(scale(lumi.import$FDS)), 
+svm.train <- train(x = t(exprs(lumi.top)), y = as.vector(lumi.import$FDS), 
                    preProcess = c("center", "scale"), metric = "RMSE", 
                    method = "svmPoly", trControl = svm.fitcontrol) 
-glm.train <- train(x = all.rmcov, y = as.vector(scale(lumi.import$FDS)), 
-                   preProcess = c("center", "scale"), metric = "RMSE", 
-                   method = "glmnet", family = "gaussian", nlambda = 10000,
-                   tuneGrid = data.frame(alpha = 0.5, lambda = 0.0163), trControl = svm.fitcontrol) 
-#ranger.train <- train(x = all.rmcov, y = lumi.import$FDS, preProcess = c("center", "scale"), metric = "RMSE", method = "ranger", trControl = ranger.fitcontrol, num.trees = 1000, tuneGrid = data.frame(mtry = nrow(lumi.top)))
 svm.preds <- svm.train$pred
-glm.preds <- glm.train$pred
-
-temp <- predict(glm.train$finalModel, all.rmcov)
-full.rmse <- rmse(temp[,ncol(temp)], scale(lumi.import$FDS))
-lm(temp[,ncol(temp)] ~ scale(lumi.import$FDS)) %>% summary
 
 p <- ggplot(svm.preds, aes(x = obs, y = pred)) + 
     geom_jitter() + 
@@ -135,18 +69,6 @@ CairoPDF("svm.poly.preds", height = 30, width = 40)
 print(p)
 dev.off()
 
-p <- ggplot(glm.preds, aes(x = obs, y = pred)) + 
-    geom_jitter() + 
-    facet_wrap( ~ Resample) + 
-    stat_smooth(method = "loess") + 
-    theme_bw() + 
-    theme(panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank())
-
-CairoPDF("glm.preds", height = 30, width = 40)
-print(p)
-dev.off()
-
 ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(gaa.enet.df$Symbol), mart = ensembl)
 bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
@@ -156,41 +78,115 @@ enet.annot <- left_join(gaa.enet.df, bm.table) %>%
     as_tibble
 RegressionWorkbook(enet.annot, "./elasticnet.table.xlsx")
 
-enet.positive <- filter(gaa.enet.df, Coefficient > 0)
-enet.negative <- filter(gaa.enet.df, Coefficient < 0)
+GAADensityPlot <- function(gaa.vector, filename) {
+    gaa.density <- density(gaa.vector) #compute density kernel of GAA distribution
+    density.df <- data.frame(x = gaa.density$x, y = gaa.density$y) #extract density coordinates and put in data frame
+    gaa.summary <- summary(gaa.vector) %>% tidy #get summary info
+    gaa.quartiles <- unlist(gaa.summary[c(2,3,5)]) #extract quartiles 1 and 3 and median
+    density.df$quant <- factor(findInterval(density.df$x, gaa.quartiles)) #assign each x-coordinate of density to the correct quartile
+    names(gaa.quartiles) <- gaa.quartiles #name the quartiles vector the same as its contents, because ggplot is weird like that
 
-svm.top5.positive <- lumi.cleaned[enet.positive$Symbol[1:5],]
-svm.top5.negative <- lumi.cleaned[enet.negative$Symbol[1:5],]
-
-svm.top5.positive <- data.frame(GAA1 = lumi.cleaned$GAA1, t(exprs(lumi.cleaned[enet.positive$Symbol[1:5],]))) %>% gather(Gene, Expression, -GAA1)
-svm.top5.positive$Gene %<>% factor(levels = str_replace(enet.positive$Symbol[1:5], "-", "."))
-top5.plot <- ggplot(svm.top5.positive, aes(x = Expression, y = GAA1)) + geom_point() + stat_smooth()
-top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free" )
-CairoPDF("svm.top5.positive", width = 20, height = 4)
-print(top5.plot)
-dev.off()
-
-svm.top5.negative <- data.frame(GAA1 = lumi.cleaned$GAA1, t(exprs(lumi.cleaned[enet.negative$Symbol[1:5],]))) %>% gather(Gene, Expression, -GAA1)
-svm.top5.negative$Gene %<>% factor(levels = str_replace(enet.negative$Symbol[1:5], "-", "."))
-top5.plot <- ggplot(svm.top5.negative, aes(x = Expression, y = GAA1)) + geom_point() + stat_smooth()
-top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free" )
-CairoPDF("svm.top5.negative", width = 20, height = 4)
-print(top5.plot)
-dev.off()
-
-regressed.genes <- read.xlsx("../WGCNA_GAA/ebam.annot.xlsx")
-regressed.sig <- filter(regressed.genes, Posterior > 0.9)
-
-bf.genes <- read.xlsx("../WGCNA_GAA/bf.fds.xlsx") %>% as_tibble
-bf.sig <- filter(bf.genes, Log.Bayes.Factor > 0.5 & Symbol %in% colnames(lumi.top)) %>% 
-    arrange(desc(abs(Median)))
-
-intersect(regressed.sig$Symbol, featureNames(lumi.top))
-intersect(bf.sig$Symbol, colnames(lumi.top))
+    #Explanation of this plot: by supplying x and y, geom_line prints the lines at the correct vertical heights and x locations - used instead of vline
+    #geom_ribbon is like density except it seems to support having multiple colors 
+    
+    p <- ggplot(density.df, aes(x, y)) + geom_line() + geom_ribbon(aes(ymin = 0, ymax = y, fill = quant)) 
+    p <- p + scale_x_continuous(breaks = gaa.quartiles) + scale_fill_brewer(palette = "Set1", guide = "none")
+    p <- p + xlab("Repeat Length") + ylab("Density")
+    CairoPDF(filename, width = 6, height = 6)
+    print(p)
+    dev.off()
+}
 
 STOP
+#full.predict <- predict(gaa.enet, all.rmcov)
+#predict.plot <- data.frame(Original = scale(lumi.import$FDS), Predicted = full.predict[,ncol(full.predict)])
+#full.rmse <- rmse(full.predict[,ncol(full.predict)], scale(lumi.import$FDS))
+#lm(full.predict[,ncol(full.predict)] ~ scale(lumi.import$FDS)) %>% summary %>% str
+
+#p <- ggplot(predict.plot, aes(x = Original, y = Predicted)) + 
+    #geom_jitter() + 
+    #stat_smooth(method = "loess") + 
+    #theme_bw() + 
+    #theme(panel.grid.major = element_blank(),
+          #panel.grid.minor = element_blank())
+
+#CairoPDF("glm.pred.original", height = 4, width = 4)
+#print(p)
+#dev.off()
+
+#FitGLM <- function(expr.matrix, sample.index, y.vector) {
+    #boot.sample <- expr.matrix[sample.index,]
+    #print("Fitting penalized regression model...")
+    #gaa.enet <- glmnet(boot.sample, as.vector(scale(y.vector)), "gaussian", nlambda = 10000, alpha = 0.5, type.gaussian = "naive")
+    #print("..model finished")
+    #predict.boot <- predict(gaa.enet, boot.sample)
+    #boot.rmse <- rmse(predict.boot[,ncol(predict.boot)], scale(y.vector))
+    #boot.rsquared <- lm(predict.boot[,ncol(predict.boot)] ~ scale(y.vector)) %>% 
+        #summary %>% extract2("r.squared")
+    #c(RMSE = boot.rmse, Rsquared = boot.rsquared)
+#}
+
+#boot.test <- boot(all.rmcov, FitGLM, R = 25, y.vector = lumi.import$FDS)
+#all.rmcov.df <- data.frame(FDS.scaled = scale(lumi.import$FDS), all.rmcov)
+#h2o.test <- h2o.deeplearning(y = "FDS.scaled", training_frame = all.rmcov.df)
+
+#glm.train <- train(x = all.rmcov, y = as.vector(scale(lumi.import$FDS)), 
+                   #preProcess = c("center", "scale"), metric = "RMSE", 
+                   #method = "glmnet", family = "gaussian", nlambda = 10000,
+                   #tuneGrid = data.frame(alpha = 0.5, lambda = 0.0163), trControl = svm.fitcontrol) 
+#ranger.train <- train(x = all.rmcov, y = lumi.import$FDS, preProcess = c("center", "scale"), metric = "RMSE", method = "ranger", trControl = ranger.fitcontrol, num.trees = 1000, tuneGrid = data.frame(mtry = nrow(lumi.top)))
+#glm.preds <- glm.train$pred
+
+#temp <- predict(glm.train$finalModel, all.rmcov)
+#full.rmse <- rmse(temp[,ncol(temp)], scale(lumi.import$FDS))
+#lm(temp[,ncol(temp)] ~ scale(lumi.import$FDS)) %>% summary
+
+#p <- ggplot(glm.preds, aes(x = obs, y = pred)) + 
+    #geom_jitter() + 
+    #facet_wrap( ~ Resample) + 
+    #stat_smooth(method = "loess") + 
+    #theme_bw() + 
+    #theme(panel.grid.major = element_blank(),
+          #panel.grid.minor = element_blank())
+
+#CairoPDF("glm.preds", height = 30, width = 40)
+#print(p)
+#dev.off()
+
+#enet.positive <- filter(gaa.enet.df, Coefficient > 0)
+#enet.negative <- filter(gaa.enet.df, Coefficient < 0)
+
+#svm.top5.positive <- lumi.cleaned[enet.positive$Symbol[1:5],]
+#svm.top5.negative <- lumi.cleaned[enet.negative$Symbol[1:5],]
+
+#svm.top5.positive <- data.frame(GAA1 = lumi.cleaned$GAA1, t(exprs(lumi.cleaned[enet.positive$Symbol[1:5],]))) %>% gather(Gene, Expression, -GAA1)
+#svm.top5.positive$Gene %<>% factor(levels = str_replace(enet.positive$Symbol[1:5], "-", "."))
+#top5.plot <- ggplot(svm.top5.positive, aes(x = Expression, y = GAA1)) + geom_point() + stat_smooth()
+#top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free" )
+#CairoPDF("svm.top5.positive", width = 20, height = 4)
+#print(top5.plot)
+#dev.off()
+
+#svm.top5.negative <- data.frame(GAA1 = lumi.cleaned$GAA1, t(exprs(lumi.cleaned[enet.negative$Symbol[1:5],]))) %>% gather(Gene, Expression, -GAA1)
+#svm.top5.negative$Gene %<>% factor(levels = str_replace(enet.negative$Symbol[1:5], "-", "."))
+#top5.plot <- ggplot(svm.top5.negative, aes(x = Expression, y = GAA1)) + geom_point() + stat_smooth()
+#top5.plot <- top5.plot + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#top5.plot <- top5.plot + facet_wrap( ~ Gene, ncol = 5, scales = "free" )
+#CairoPDF("svm.top5.negative", width = 20, height = 4)
+#print(top5.plot)
+#dev.off()
+
+#regressed.genes <- read.xlsx("../WGCNA_GAA/ebam.annot.xlsx")
+#regressed.sig <- filter(regressed.genes, Posterior > 0.9)
+
+#bf.genes <- read.xlsx("../WGCNA_GAA/bf.fds.xlsx") %>% as_tibble
+#bf.sig <- filter(bf.genes, Log.Bayes.Factor > 0.5 & Symbol %in% colnames(lumi.top)) %>% 
+    #arrange(desc(abs(Median)))
+
+#intersect(regressed.sig$Symbol, featureNames(lumi.top))
+#intersect(bf.sig$Symbol, colnames(lumi.top))
+
 #registerDoMC(cores = 6)
 #svm.continuous.rfe <- map(rfe.size, SVMContinuous, care.ranking.median.df, lumi.cleaned)
 #SaveRDSgz(svm.continuous.rfe, "./save/svm.continuous.rfe.rda")

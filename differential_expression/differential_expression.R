@@ -7,13 +7,10 @@ library(sva)
 library(WGCNA)
 library(BayesFactor)
 library(matrixStats)
-#library(limma)
-#library(siggenes)
+library(limma)
 
 library(openxlsx)
 library(Cairo)
-library(heatmap.plus)
-library(gplots) #for heatmap.2
 library(RColorBrewer)
 library(tools)
 library(R.utils)
@@ -117,22 +114,31 @@ MDSPlot <- function(filename, dataset, targetset, colorscheme = "none", variable
     dev.off()
 }
 
-CovarBayes <- function(gene.vector, trait.df) {
+CovarBayes <- function(gene.name, expr.matrix, trait.df) {
+    gene.vector <- expr.matrix[gene.name,]
     trait.df <- data.frame(trait.df, Gene = gene.vector)
-    trait.anova <- lmBF(Gene ~ 1 + Sex + Age, data = trait.df) 
-    trait.anova
+    set.seed(12345)
+    trait.anova <- lmBF(Gene ~ Sex + Age, data = trait.df) 
+    set.seed(12345)
+    trait.posterior <- posterior(trait.anova, iterations = 10000) 
+    saveRDS(trait.posterior, str_c("./save/posterior/", gene.name), compress = FALSE)
 }
 
-DEBayes <- function(gene.vector, trait.df) {
+DEBayes <- function(gene.name, expr.matrix, trait.df) {
+    gene.vector <- expr.matrix[gene.name,]
     trait.df <- data.frame(trait.df, Gene = gene.vector)
+    set.seed(12345)
     trait.anova <- lmBF(Gene ~ Status + RIN, data = trait.df) 
-    notrait.anova <- lmBF(Gene ~ RIN, data = trait.df)
-    c(trait.anova, notrait.anova)
+    notrait.anova <- lmBF(Gene ~ RIN, data = trait.df) 
+    combined <- c(trait.anova, notrait.anova)
+    saveRDS(combined, str_c("./save/model/", gene.name), compress = FALSE)
+    set.seed(12345)
+    trait.posterior <- posterior(trait.anova, iterations = 10000) 
+    saveRDS(trait.posterior, str_c("./save/posterior/", gene.name), compress = FALSE)
 }
 
 #Make Excel spreadsheet
 DEWorkbook <- function(de.table, filename) { 
-    zscore.cols <- colnames(de.table) %>% str_detect("Z.score") %>% which
     bf.cols <- colnames(de.table) %>% str_detect("Log.Bayes.Factor") %>% which
     logFC.cols <- colnames(de.table) %>% str_detect("logFC") %>% which
 
@@ -143,16 +149,13 @@ DEWorkbook <- function(de.table, filename) {
     sig.bf <- createStyle(fontColour = "red")
     conditionalFormatting(wb, 1, cols = bf.cols, 
                           rows = 1:nrow(de.table), rule = ">0.5", style = sig.bf)
-    conditionalFormatting(wb, 1, cols = zscore.cols, 
-                          rows = 1:nrow(de.table), style = c("#63BE7B", "white", "red"), 
-                          type = "colourScale")
     conditionalFormatting(wb, 1, cols = logFC.cols, 
                           rows = 1:nrow(de.table), style = c("#63BE7B", "white", "red"), 
                           type = "colourScale")
 
     setColWidths(wb, 1, cols = 1, widths = "auto")
     setColWidths(wb, 1, cols = 2, widths = 45)
-    setColWidths(wb, 1, cols = 3:12, widths = 15)
+    setColWidths(wb, 1, cols = 3:ncol(de.table), widths = "auto")
 
     pageSetup(wb, 1, orientation = "landscape", fitToWidth = TRUE)
     freezePane(wb, 1, firstRow = TRUE)
@@ -161,19 +164,25 @@ DEWorkbook <- function(de.table, filename) {
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-BayesPlot <- function(bayes.df, filename, threshold, plot.title, sig.column, log.column = "logFC", xlabel = "Log Fold Change") {
-    p <- ggplot(bayes.df, aes_string(x = log.column, y = "Log.Bayes.Factor")) + 
-        geom_point(aes_string(color = sig.column)) + 
-        theme_bw() + theme(panel.grid.major = element_blank(), 
-                           panel.grid.minor = element_blank(), 
-                           panel.border = element_rect(size = 1, color = "black"),
-                           legend.position = "none",
-                           plot.background = element_blank(),
-                           plot.title = element_text(hjust = 0.5)) + 
-        xlab(xlabel) + ylab("Log Bayes Factor") + ggtitle(plot.title) + 
-        scale_color_manual(values = c("orange", "darkgreen"), name = "Significant", labels = c("Yes", "No"))
+BayesPlot <- function(bayes.df, filename, plot.title, diff.column, log.column = "logFC", xlabel = "Log Fold Change") {
+    sig.df <- filter_(bayes.df, str_c("Log.Bayes.Factor > 0.5 & ", diff.column, " == TRUE"))
+    notsig.df <- filter_(bayes.df, str_c("Log.Bayes.Factor < 0.5 | ", diff.column, " == FALSE"))
+    plot.title <- str_c(plot.title, " (", nrow(sig.df), "/", nrow(bayes.df), " Transcripts)")
 
-    CairoPDF(filename, width = 4, height = 4, bg = "transparent")
+    p <- ggplot() +
+         geom_point(aes_string(x = log.column, y = "Log.Bayes.Factor"), color = "gray", notsig.df) + 
+         geom_point(aes_string(x = log.column, y = "Log.Bayes.Factor"), color = "mediumblue", sig.df) + 
+         theme_bw() + 
+         theme(panel.grid.major = element_blank(), 
+               panel.grid.minor = element_blank(), 
+               panel.border = element_rect(size = 1, color = "black"),
+               legend.position = "none",
+               plot.background = element_blank(),
+               plot.title = element_text(hjust = 0.5)) + 
+         xlab(xlabel) + ylab(expression(paste(Log[10], " Bayes Factor"))) + 
+         ggtitle(plot.title) 
+
+    CairoPDF(filename, width = 6, height = 6, bg = "transparent")
     print(p)
     dev.off()
 }
@@ -245,18 +254,17 @@ EnrichrWorkbook <- function(database, full.df, colname) {
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-EnrichrPlot <- function(enrichr.df, enrichr.expr, filename, plot.title, plot.height = 5, plot.width = 8, opposite = FALSE) {
+EnrichrPlot <- function(enrichr.df, enrichr.expr, prefix, plot.title, plot.height = 5, plot.width = 8) {
     enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% 
         map(unlist) %>% map_int(length)
-    enrichr.df$Log.Bayes.Factor <- log10(enrichr.df$Bayes.Factor)
-    enrichr.updown <- map(enrichr.df$Genes, UpDown, enrichr.expr, opposite) %>% reduce(rbind)
+    enrichr.updown <- map(enrichr.df$Genes, UpDown, enrichr.expr, prefix) %>% reduce(rbind)
     colnames(enrichr.updown) <- c("Down", "Up")
 
     enrichr.df <- cbind(enrichr.df, enrichr.updown)
     enrichr.df$Log.Up <- enrichr.df$Log.Bayes.Factor * enrichr.df$Up / enrichr.df$Gene.Count
     enrichr.df$Log.Down <- enrichr.df$Log.Bayes.Factor * enrichr.df$Down / enrichr.df$Gene.Count
     enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% 
-        str_replace_all("\\_Homo.*$", "") %>% tolower #Remove any thing after the left parenthesis and convert to all lower case
+        str_replace_all("\\_Homo.*$", "") #%>% tolower #Remove any thing after the left parenthesis and convert to all lower case
     enrichr.df$Format.Name <- str_c(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")")
     enrichr.df %<>% arrange(Log.Bayes.Factor)
     enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
@@ -277,18 +285,19 @@ EnrichrPlot <- function(enrichr.df, enrichr.expr, filename, plot.title, plot.hei
               axis.title.y = element_blank(), 
               axis.ticks.y = element_blank(), 
               axis.text.y = element_text(size = 12)) +
-        ylab(expression(paste(Log[10], ' Bayes Factor'))) + ggtitle(plot.title)
+        ylab("logBF") + ggtitle(plot.title)
 
-    CairoPDF(filename, height = plot.height, width = plot.width, bg = "transparent")
+    CairoPDF(str_c(prefix, ".enrichr"), height = plot.height, width = plot.width, bg = "transparent")
     print(p)
     dev.off()
 }
 
-UpDown <- function(filter.vector, enrichr.df, opposite = FALSE) {
+UpDown <- function(filter.vector, enrichr.df, prefix) {
     split.vector <- str_split(filter.vector, ",")[[1]]
-    enrichr.filter <- filter(enrichr.df, is.element(Symbol, split.vector))
-    enrichr.vector <- c("Up" = length(which(sign(enrichr.filter$Z.score) == 1)), 
-                        "Down" = length(which(sign(enrichr.filter$Z.score) == -1)))
+    enrichr.filter <- filter(enrichr.df, Symbol %in% split.vector)
+    log.column <- str_c("logFC.", prefix)
+    enrichr.vector <- c("Up" = length(which(sign(enrichr.filter[[log.column]]) == 1)), 
+                        "Down" = length(which(sign(enrichr.filter[[log.column]]) == -1)))
     enrichr.vector
 }
 
@@ -297,7 +306,7 @@ objects.size <- lapply(ls(), function(thing) print(object.size(get(thing)), unit
 names(objects.size) <- ls()
 unlist(objects.size) %>% sort
 
-source("../common_functions.R") #Load shared functions
+source("../../code/common_functions.R") #Load shared functions
 targets.final <- ReadRDSgz("../phenotypedata/targets.final.rda") #Load phenotype data
 
 #Drop probes not found in all batches - this step is NOT normally necessary, was needed due to some inconsistencies in the 
@@ -393,15 +402,14 @@ combat.collapse <- ExpressionSet(assayData = combat.collapse.expr$datETcollapsed
 SaveRDSgz(combat.collapse, file = "./save/combat.collapse.rda")
 
 #Check for collinearity
-age.all <- lm(Age ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
-age.aov <- aov(Age ~ Status, pData(lumi.rmout)) %>% TukeyHSD
-sex.all <- lm(as.integer(Sex) ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
-sex.aov <- aov(as.integer(Sex) ~ Status, pData(lumi.rmout)) %>% TukeyHSD
-batch.all <- lm(as.integer(Batch) ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
-RIN.all <- lm(RIN ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
-site.all <- lm(as.integer(factor(Site)) ~ Status, pData(lumi.rmout)) %>% anova %>% tidy
+age.all <- anovaBF(Age ~ Status, pData(combat.collapse)) %>% extractBF
+RIN.all <- anovaBF(RIN ~ Status, pData(combat.collapse)) %>% extractBF
 
-p <- ggplot(pData(lumi.rmout), aes(x = Status, y = Age, fill = Status)) + geom_violin() + geom_boxplot(width = 0.1) 
+sex.all <- contingencyTableBF(Sex ~ Status, pData(combat.collapse)) %>% extractBF
+batch.all <- contingencyTableBF(Batch ~ Status, pData(combat.collapse)) %>% extractBF
+site.all <- contingencyTableBF(Site ~ Status, pData(combat.collapse)) %>% extractBF
+
+p <- ggplot(pData(combat.collapse), aes(x = Status, y = Age, fill = Status)) + geom_violin() + geom_boxplot(width = 0.1) 
 p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "none")
 p <- p + theme(axis.title = element_blank()) + ggtitle(paste("Age (p < ", signif(age.all$p.value[1], 3), "*)", sep = ""))
 CairoPDF("./age_boxplot.pdf", height = 6, width = 6)
@@ -439,10 +447,9 @@ CairoPDF("./site_barplot.pdf", height = 3, width = 3)
 plot(p)
 dev.off()
 
-
-covar.bayes <- apply(t(exprs(combat.collapse)), 2, CovarBayes, select(pData(combat.collapse), Sex, Age))
-SaveRDSgz(covar.bayes, "./save/covar.bayes.rda")
-posterior.covar <- map(covar.bayes, posterior, iterations = 10000) 
+#Remove effects of covariates
+catch <- mclapply(featureNames(combat.collapse), CovarBayes, exprs(combat.collapse), select(pData(combat.collapse), Sex, Age), mc.cores = 8)
+posterior.covar <- list.files("./save/posterior", full.names = TRUE) %>% map(readRDS)
 SaveRDSgz(posterior.covar, "./save/posterior.covar.rda")
 covar.coefs <- map(posterior.covar, colMedians) %>% reduce(rbind)
 colnames(covar.coefs) <- colnames(posterior.covar[[1]])
@@ -452,19 +459,19 @@ covar.remove <- model.matrix(~ Sex + Age, pData(combat.collapse))[,-1] %>% t
 rmcov.collapse.expr <- exprs(combat.collapse) - (covar.coefs[,c("Sex-MALE","Age-Age")] %*% covar.remove)
 rmcov.lumi <- combat.collapse #Make a copy of lumi object
 exprs(rmcov.lumi) <- rmcov.collapse.expr #Transfer cleaned expression values into new lumi object
+SaveRDSgz(rmcov.lumi, "./save/rmcov.lumi.rda")
 
-#Remove effects of covariates
-
-
-de.bayes <- apply(t(exprs(rmcov.lumi)), 2, DEBayes, select(pData(rmcov.lumi), Status, RIN))
-SaveRDSgz(de.bayes, "./save/de.bayes.rda")
-de.bf <- map(de.bayes, extractBF) %>% 
+#Differential Expression
+catch <- mclapply(featureNames(rmcov.lumi), DEBayes, exprs(rmcov.lumi), select(pData(rmcov.lumi), Status, RIN), mc.cores = 8)
+model.de <- list.files("./save/model", full.names = TRUE) %>% map(readRDS) 
+SaveRDSgz(model.de, "./save/model.de.rda")
+de.bf <- map(model.de, extractBF) %>% 
     map(extract2, "bf") %>% 
     map_dbl(reduce, divide_by) %>% 
     map_dbl(log10) %>% 
     signif(3)
-bf.df <- tibble(Symbol = names(de.bf), Log.Bayes.Factor = de.bf) 
-posterior.status <- map(de.bayes, posterior, iterations = 10000) 
+bf.df <- tibble(Symbol = featureNames(rmcov.lumi), Log.Bayes.Factor = de.bf) 
+posterior.status <- list.files("./save/posterior", full.names = TRUE) %>% map(readRDS)
 SaveRDSgz(posterior.status, "./save/posterior.status.rda")
 
 posterior.mu.df <- map(posterior.status, magrittr::extract, TRUE, 1) %>% 
@@ -491,51 +498,80 @@ bm.table <- getBM(attributes = c('hgnc_symbol', 'description'),
                  mart = ensembl)
 bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
 colnames(bm.table) <- c("Symbol", "Definition")
+bm.table %<>% filter(!duplicated(Symbol))
 
-posterior.final.df <- cbind(bf.df, posterior.patient.df, posterior.carrier.df, posterior.control.df, posterior.mu.df) %>%
-    as_tibble %>% arrange(desc(Log.Bayes.Factor)) %>%
+posterior.final.df <- cbind(bf.df, posterior.patient.df, posterior.carrier.df, posterior.control.df, posterior.mu.df) %>% 
+    as_tibble %>% 
     mutate(logFC.pco = Patient_Median - Control_Median, 
            logFC.pca = Patient_Median - Carrier_Median, 
            logFC.cc = Carrier_Median - Control_Median, 
            pco.diff = Patient_CI_2.5 > Control_CI_97.5 | Patient_CI_97.5 < Control_CI_2.5,
            pca.diff = Patient_CI_2.5 > Carrier_CI_97.5 | Patient_CI_97.5 < Carrier_CI_2.5,
            cc.diff = Carrier_CI_2.5 > Control_CI_97.5 | Carrier_CI_97.5 < Control_CI_2.5) %>%
+    mutate_if(is.numeric, signif, digits = 3) %>%
     left_join(bm.table) %>%
     select(Symbol, Definition, Log.Bayes.Factor, contains("logFC"), contains("diff"), 
-           contains("mu"), contains("Patient"), contains("Control"), contains("Carrier")) %>%
-    arrange(desc(abs(logFC.pco)))
+           contains("mu"), contains("Patient"), contains("Control"), contains("Carrier")) 
+bf.df.sig <- filter(posterior.final.df, Log.Bayes.Factor > 0.5)
 SaveRDSgz(posterior.final.df, "./save/posterior.final.df.rda")
+DEWorkbook(arrange(posterior.final.df, desc(Log.Bayes.Factor)), "table_annotated.xlsx")
 
-EstimateViolinPlot(posterior.status[["DYSF"]], "DYSF")
+BayesPlot(posterior.final.df, "pco.volcano", "Patient vs. Control", "pco.diff", "logFC.pco")
+BayesPlot(posterior.final.df, "pca.volcano", "Patient vs. Carrier", "pca.diff", "logFC.pca")
+BayesPlot(posterior.final.df, "cc.volcano", "Carrier vs. Control", "cc.diff", "logFC.cc")
 
-pca.venn.df <- arrange(ebam.pca.df, Symbol)
-pca.venn.df$Significant <- pca.venn.df$pca.Posterior > 0.9 
-pca.venn.df$Decide <- as.integer(pca.venn.df$Significant) * sign(pca.venn.df$pca.Z.score) 
-pco.venn.df <- arrange(ebam.pco.df, Symbol)
-pco.venn.df$Significant <- pco.venn.df$pco.Posterior > 0.9 
-pco.venn.df$Decide <- as.integer(pco.venn.df$Significant) * sign(pco.venn.df$pco.Z.score) 
+pco.sig <- rep(0, nrow(posterior.final.df))
+pco.sig[posterior.final.df$Log.Bayes.Factor > 0.5 & posterior.final.df$Patient_CI_2.5 > posterior.final.df$Control_CI_97.5] <- 1
+pco.sig[posterior.final.df$Log.Bayes.Factor > 0.5 & posterior.final.df$Patient_CI_97.5 < posterior.final.df$Control_CI_2.5] <- -1
+pca.sig <- rep(0, nrow(posterior.final.df))
+pca.sig[posterior.final.df$Log.Bayes.Factor > 0.5 & posterior.final.df$Patient_CI_2.5 > posterior.final.df$Carrier_CI_97.5] <- 1
+pca.sig[posterior.final.df$Log.Bayes.Factor > 0.5 & posterior.final.df$Patient_CI_97.5 < posterior.final.df$Carrier_CI_2.5] <- -1
+cc.sig <- rep(0, nrow(posterior.final.df))
+cc.sig[posterior.final.df$Log.Bayes.Factor > 0.5 & posterior.final.df$Carrier_CI_2.5 > posterior.final.df$Control_CI_97.5] <- 1
+cc.sig[posterior.final.df$Log.Bayes.Factor > 0.5 & posterior.final.df$Carrier_CI_97.5 < posterior.final.df$Control_CI_2.5] <- -1
 
-venn.matrix <- cbind("Patient vs. Control" = pco.venn.df$Decide, "Patient vs. Carrier" = pca.venn.df$Decide)
-rownames(venn.matrix) <- featureNames(pca.collapse)
+venn.matrix <- cbind("Patient vs. Control" = pco.sig, "Patient vs. Carrier" = pca.sig, "Control vs. Carrier" = cc.sig)
+rownames(venn.matrix) <- featureNames(rmcov.lumi)
 
 #Venn Diagram - adjust with ebam
 CairoPDF("venn_diagram", width = 10, height = 10)
 vennDiagram(venn.matrix, include = c("up", "down"), counts.col = c("red", "green"), show.include = "FALSE")
 dev.off()
 
+#Load FDS regression
+bf.fds.table <- read.xlsx("../WGCNA_GAA/bf.fds.xlsx")
+bf.fds.sig <- filter(bf.fds.table, Log.Bayes.Factor > 0.5)
+colnames(bf.fds.sig)[3] <- "Log.Bayes.Factor.fds"
+shared.sig <- inner_join(bf.df.sig, bf.fds.sig) %>% 
+    arrange(desc(abs(logFC.pco)))
+write.xlsx(shared.sig, "shared.sig.xlsx")
+write.xlsx(arrange(shared.sig, desc(abs(Median))), "shared.sig.fs.xlsx")
+
+#Load WGCNA
+module.membership <- read.xlsx("../WGCNA/module_membership.xlsx")
+module.magenta <- filter(module.membership, Module == "magenta") 
+pco.magenta <- filter(posterior.final.df, Log.Bayes.Factor > 0.5 & pco.diff == TRUE) %>%
+    inner_join(module.magenta) %>% arrange(desc(kscaled))
+
+#Load Classification
+lasso.table <- read.xlsx("../classification/lasso.table.xlsx") %>% select(-Definition)
+lasso.keep <- filter(lasso.table, Coefficient.Patient > 0)
+lasso.combined <- left_join(lasso.keep, posterior.final.df) %>% 
+    filter(Log.Bayes.Factor > 0.5) %>% arrange(desc(abs(logFC.pco)))
+
 #Submit genes to Enrichr
 source('../../code/GO/enrichr.R')
-enrichr.terms <- c("GO Biological Process", "GO Molecular Function", "GO Cellular Component") 
+enrichr.terms <- c("GO Biological Process", "GO Molecular Function", "KEGG", "Reactome") 
 
-pca.sig <- filter(ebam., Posterior > 0.9)$Symbol
-pca.enrichr <- map(enrichr.terms, GetHyper, pca.sig, pca.ebam$Symbol)
+pca.sig.df <- filter(posterior.final.df, Log.Bayes.Factor > 0.5 & pca.diff == TRUE)
+pca.enrichr <- map(enrichr.terms, GetHyper, pca.sig.df$Symbol, posterior.final.df$Symbol)
 names(pca.enrichr) <- enrichr.terms
 map(enrichr.terms, EnrichrWorkbook, pca.enrichr, "pca")
 
 pca.gobiol.file <- "./enrichr/pca/GO Biological Process.xlsx" 
 pca.gobiol <- read.xlsx(pca.gobiol.file) 
-GetKappaCluster(file_path_sans_ext(pca.gobiol.file), pca.enrichr[["GO Biological Process"]], pca.ebam$Symbol)
 pca.gobiol$Database <- "GO BP"
+GetKappaCluster(file_path_sans_ext(pca.gobiol.file), pca.enrichr[["GO Biological Process"]], pca.sig.df$Symbol, "Log.Bayes.Factor")
 
 pca.gomole.file <- "./enrichr/pca/GO Molecular Function.xlsx"
 pca.gomole <- read.xlsx(pca.gomole.file) 
@@ -543,31 +579,31 @@ pca.gomole$Database <- "GO MF"
 
 pca.reactome.file <- "./enrichr/pca/Reactome.xlsx"
 pca.reactome <- read.xlsx(pca.reactome.file) 
-GetKappaCluster(file_path_sans_ext(pca.reactome.file), pca.enrichr[["Reactome"]], pca.ebam$Symbol)
 pca.reactome$Database <- "Reactome"
+GetKappaCluster(file_path_sans_ext(pca.reactome.file), pca.enrichr[["Reactome"]], pca.sig.df$Symbol, "Log.Bayes.Factor")
 
 pca.kegg.file <- "./enrichr/pca/KEGG.xlsx"
 pca.kegg <- read.xlsx(pca.kegg.file) 
 pca.kegg$Database <- "KEGG"
 
-pca.gobiol.final <- slice(pca.gobiol, c(104, 8, 46, 58, 82))
-pca.gomole.final <- slice(pca.gomole, 1)
-pca.kegg.final <- slice(pca.kegg, 9)
-pca.reactome.final <- slice(pca.reactome, 7)
+pca.gobiol.final <- slice(pca.gobiol, c(1,4,6,21))
+pca.gomole.final <- slice(pca.gomole, 4)
+pca.kegg.final <- slice(pca.kegg, c(1,5))
+pca.reactome.final <- slice(pca.reactome, c(1,8))
 
-pca.enrichr <- rbind(pca.gobiol.final, pca.gomole.final, pca.kegg.final, pca.reactome.final)
-EnrichrPlot(pca.enrichr, pca.ebam, "pca.enrichr", "Patient vs. Carrier", plot.height = 4, plot.width = 8.5)
+pca.enrichr.df <- rbind(pca.gobiol.final, pca.gomole.final, pca.kegg.final, pca.reactome.final)
+EnrichrPlot(pca.enrichr.df, posterior.final.df, "pca", "Patient vs. Carrier", plot.height = 4, plot.width = 7.5)
 
 #Patient vs. Control
-pco.sig <- filter(ebam.pco.df, Posterior.pco > 0.9)$Symbol
-pco.enrichr <- map(enrichr.terms, GetHyper, pco.sig, pco.ebam$Symbol)
+pco.sig.df <- filter(posterior.final.df, Log.Bayes.Factor > 0.5 & pco.diff == TRUE)
+pco.enrichr <- map(enrichr.terms, GetHyper, pco.sig.df$Symbol, posterior.final.df$Symbol)
 names(pco.enrichr) <- enrichr.terms
 map(enrichr.terms, EnrichrWorkbook, pco.enrichr, "pco")
 
 pco.gobiol.file <- "./enrichr/pco/GO Biological Process.xlsx"
 pco.gobiol <- read.xlsx(pco.gobiol.file) 
-GetKappaCluster(file_path_sans_ext(pco.gobiol.file), pco.enrichr[["GO Biological Process"]], pco.ebam$Symbol)
 pco.gobiol$Database <- "GO BP"
+GetKappaCluster(file_path_sans_ext(pco.gobiol.file), pco.enrichr[["GO Biological Process"]], pco.sig.df$Symbol, "Log.Bayes.Factor")
 
 pco.gomole.file <- "./enrichr/pco/GO Molecular Function.xlsx"
 pco.gomole <- read.xlsx(pco.gomole.file) 
@@ -576,223 +612,17 @@ pco.gomole$Database <- "GO MF"
 pco.reactome.file <- "./enrichr/pco/Reactome.xlsx"
 pco.reactome <- read.xlsx(pco.reactome.file) 
 pco.reactome$Database <- "Reactome"
+GetKappaCluster(file_path_sans_ext(pco.reactome.file), pco.enrichr[["Reactome"]], pco.sig.df$Symbol, "Log.Bayes.Factor")
 
-pco.gobiol.final <- slice(pco.gobiol, c(1, 2, 3, 48))
-pco.gomole.final <- slice(pco.gomole, 2)
-pco.reactome.final <- slice(pco.reactome, 2)
+pco.kegg.file <- "./enrichr/pco/KEGG.xlsx"
+pco.kegg <- read.xlsx(pco.kegg.file) 
+pco.kegg$Database <- "KEGG"
 
-pco.enrichr <- rbind(pco.gobiol.final, pco.gomole.final, pco.reactome.final)
-EnrichrPlot(pco.enrichr, pco.ebam, "pco.enrichr", "Patient vs. Control", plot.height = 3.25, plot.width = 7.5)  
+pco.gobiol.final <- slice(pco.gobiol, c(1, 2, 8, 15))
+pco.gomole.final <- slice(pco.gomole, 4)
+pco.kegg.final <- slice(pco.kegg, 1)
+pco.reactome.final <- slice(pco.reactome, 1)
 
-lasso.table <- read.xlsx("../classification/lasso.table.xlsx") %>% select(-Definition)
-lasso.pca <- filter(lasso.table, Coefficient.pca > 0)
-lasso.pco <- filter(lasso.table, Coefficient.pco > 0)
-pca.combined <- left_join(lasso.pca, table.annot)
-pca.combined.final <- filter(pca.combined, Posterior.pco > 0.9) 
-pco.combined <- left_join(lasso.pco, table.annot)
-pco.combined.final <- filter(pco.combined, Posterior.pco > 0.9) 
+pco.enrichr <- rbind(pco.gobiol.final, pco.gomole.final, pco.kegg.final, pco.reactome.final)
+EnrichrPlot(pco.enrichr, posterior.final.df, "pco", "Patient vs. Control", plot.height = 3.25, plot.width = 7)  
 
-bf.gaa.table <- read.xlsx("../WGCNA_GAA/bf.gaa.xlsx") 
-bf.gaa.sig <- filter(bf.gaa.table, Bayes.Factor > 3)
-gaa.combined <- left_join(bf.gaa.sig, table.annot)
-gaa.combined.filter <- filter(gaa.combined, Posterior.pco > 0.9)
-
-#Breakdown into separate comparisons
-#lumi.pca <- lumi.rmout[,grepl("Patient|Carrier", lumi.rmout$Status)]
-#lumi.pco <- lumi.rmout[,grepl("Patient|Control", lumi.rmout$Status)]
-#lumi.cc <- lumi.rmout[,grepl("Carrier|Control", lumi.rmout$Status)]
-
-#lumi.pca$Status %<>% droplevels
-#lumi.pco$Status %<>% droplevels
-#lumi.cc$Status %<>% droplevels
-
-#model.pca <- model.matrix(~ Sex + Age + RIN, data = pData(lumi.pca)) #Create model matrix of covariates to be removed
-#rmcov.pca.expr <- removeBatchEffect(exprs(lumi.pca), covariates = model.pca[,-1]) #Remove the effects of covariates, with the difference in diagnoses being supplied as the design argument to preserve those group differences
-#rmcov.pca <- lumi.pca #Make a copy of lumi object
-#exprs(rmcov.pca) <- rmcov.pca.expr #Transfer cleaned expression values into new lumi object
-
-##Collapse the data by symbol
-#pca.collapse.expr <- collapseRows(exprs(rmcov.pca), getSYMBOL(featureNames(rmcov.pca), 'lumiHumanAll.db'), rownames(rmcov.pca)) #collapseRows by symbol
-#pca.collapse <- ExpressionSet(assayData = pca.collapse.expr$datETcollapsed, phenoData = phenoData(rmcov.pca))
-#SaveRDSgz(pca.collapse, file = "./save/pca.collapse.rda")
-
-#model.pco <- model.matrix(~ Sex + Age + RIN, data = pData(lumi.pco)) #Create model matrix of covariates to be removed
-#rmcov.pco.expr <- removeBatchEffect(exprs(lumi.pco), covariates = model.pco[,-1]) #Remove the effects of covariates, with the difference in diagnoses being supplied as the design argument to preserve those group differences
-#rmcov.pco <- lumi.pco #Make a copy of lumi object
-#exprs(rmcov.pco) <- rmcov.pco.expr #Transfer cleaned expression values into new lumi object
-
-##Collapse the data by symbol
-#pco.collapse.expr <- collapseRows(exprs(rmcov.pco), getSYMBOL(featureNames(rmcov.pco), 'lumiHumanAll.db'), rownames(rmcov.pco)) #collapseRows by symbol
-#pco.collapse <- ExpressionSet(assayData = pco.collapse.expr$datETcollapsed, phenoData = phenoData(rmcov.pco))
-#SaveRDSgz(pco.collapse, file = "./save/pco.collapse.rda")
-
-#model.cc <- model.matrix(~ Sex + Age + RIN, data = pData(lumi.cc)) #Create model matrix of covariates to be removed
-#rmcov.cc.expr <- removeBatchEffect(exprs(lumi.cc), covariates = model.cc[,-1]) #Remove the effects of covariates, with the difference in diagnoses being supplied as the design argument to preserve those group differences
-#rmcov.cc <- lumi.cc #Make a copy of lumi object
-#exprs(rmcov.cc) <- rmcov.cc.expr #Transfer cleaned expression values into new lumi object
-
-##Collapse the data by symbol
-#cc.collapse.expr <- collapseRows(exprs(rmcov.cc), getSYMBOL(featureNames(rmcov.cc), 'lumiHumanAll.db'), rownames(rmcov.cc)) #collapseRows by symbol
-#cc.collapse <- ExpressionSet(assayData = cc.collapse.expr$datETcollapsed, phenoData = phenoData(rmcov.cc))
-#SaveRDSgz(cc.collapse, file = "./save/cc.collapse.rda")
-
-##EBAM test
-#a0.pco <- find.a0(pco.collapse, as.integer(pco.collapse$Status), B = 1000, rand = 12345)
-#ebam.pco <- ebam(a0.pco)
-#ebam.pco.df <- data.frame(Z.score = ebam.pco@z, Posterior = ebam.pco@posterior)
-#ebam.pco.df$Symbol <- rownames(ebam.pco.df)
-#pco.ebam <- ebam.pco.df
-#ebam.pco.df %<>% arrange(desc(Posterior))
-#SaveRDSgz(ebam.pco.df, "./save/ebam.pco.df.rda")
-#write.xlsx(ebam.pco.df, "ebam.pco.xlsx")
-
-#a0.pca <- find.a0(pca.collapse, as.integer(pca.collapse$Status), B = 1000, rand = 12345)
-#ebam.pca <- ebam(a0.pca)
-#ebam.pca.df <- data.frame(Z.score = ebam.pca@z, Posterior = ebam.pca@posterior)
-#ebam.pca.df$Symbol <- rownames(ebam.pca.df)
-#pca.ebam <- ebam.pca.df
-#ebam.pca.df %<>% arrange(desc(Posterior))
-#SaveRDSgz(ebam.pca.df, "./save/ebam.pca.df.rda")
-#write.xlsx(ebam.pca.df, "ebam.pca.xlsx")
-
-#cc.collapse$Status %<>% factor(levels = c("Control", "Carrier"))
-#a0.cc <- find.a0(cc.collapse, as.integer(cc.collapse$Status), B = 1000, rand = 12345)
-#ebam.cc <- ebam(a0.cc)
-#ebam.cc.df <- data.frame(Z.score = ebam.cc@z, Posterior = ebam.cc@posterior)
-#ebam.cc.df$Symbol <- rownames(ebam.cc.df)
-#ebam.cc.df %<>% arrange(desc(Posterior))
-#SaveRDSgz(ebam.cc.df, "./save/ebam.cc.df.rda")
-
-##Retrieve annotation information from Ensembl
-#ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-#bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(toptable.all$Symbol), mart = ensembl)
-#bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
-#colnames(bm.table) <- c("Symbol", "Definition")
-
-#colnames(ebam.pca.df)[1:2] <- str_c("pca.", colnames(ebam.pca.df)[1:2])
-#pca.join <- left_join(ebam.pca.df, toptable.pca) %>% select(pca.Z.score:AveExpr)
-
-#colnames(ebam.pco.df)[1:2] <- str_c("pco.", colnames(ebam.pco.df)[1:2])
-#pco.join <- left_join(ebam.pco.df, toptable.pco) %>% select(pco.Z.score:AveExpr)
-
-#colnames(ebam.cc.df)[1:2] <- str_c("cc.", colnames(ebam.cc.df)[1:2])
-#cc.join <- left_join(ebam.cc.df, toptable.cc) %>% select(cc.Z.score:AveExpr)
-
-#ebam.join <- left_join(pca.join, pco.join) %>% left_join(cc.join)
-
-#table.annot <- left_join(ebam.join, bm.table) %>% 
-    #select(Symbol, Definition, AveExpr, dplyr::contains("logFC"), dplyr::contains("Posterior"), dplyr::contains("Z.score")) %>%
-    #arrange(desc(Posterior.pco))
-#table.annot[,3:ncol(table.annot)] <- signif(table.annot[,3:ncol(table.annot)], 3)
-
-#DEWorkbook(table.annot, "table_annotated.xlsx")
-
-#BayesPlot(table.annot, "ebam_pco", 0.9, "Patient vs. Control", posterior.column = "Posterior.pco", log.column = "logFC.pco")
-#BayesPlot(table.annot, "ebam_pca", 0.9, "Patient vs. Carrier", posterior.column = "Posterior.pca", log.column = "logFC.pca")
-
-#Anova heatmaps
-#Calculate ratios for use in tables
-#pco.controls <- exprs(pco.collapse[,pco.collapse$Status == "Control"])
-#pco.controls.means <- rowMeans(pco.controls)
-#pco.patients <- exprs(pco.collapse[,pco.collapse$Status == "Patient"])
-
-#pca.carriers <- exprs(pca.collapse[,pca.collapse$Status == "Carrier"])
-#pca.carriers.means <- rowMeans(pca.carriers)
-#pca.patients <- exprs(pca.collapse[,pca.collapse$Status == "Patient"])
-
-#coef.pco <- pco.patients - pco.controls.means
-#coef.pca <- pca.patients - pca.carriers.means
-
-#SaveRDSgz(coef.pca, "coef.pca.rda")
-#SaveRDSgz(coef.pco, "coef.pco.rda")
-
-#Adjust with ebam
-#pco.plot <- coef.pco[ebam.pco.df$pco.Posterior > 0.9,]
-#pca.plot <- coef.pca[ebam.pca.df$pca.Posterior > 0.9,]
-
-#CairoPDF("anova_heatmap_patient_vs_control", width = 18, height = 18)
-#heatmap.object <- heatmap.2(as.matrix(pco.plot), col = rev(redgreen(48)), breaks = c(seq(-2, -1.25, 0.25), seq(-1, 1, 0.05), seq(1.25, 2, 0.25)), trace = "none", labCol = "", labRow = "", keysize = 0.9)
-#dev.off()
-
-#CairoPDF("anova_heatmap_patient_vs_carrier", width = 18, height = 18)
-#heatmap.object <- heatmap.2(as.matrix(pca.plot), col = rev(redgreen(48)), breaks = c(seq(-2, -1.25, 0.25), seq(-1, 1, 0.05), seq(1.25, 2, 0.25)), trace = "none", labCol = "", labRow = "", keysize = 0.9)
-#dev.off()
-
-#Patient vs. Control Posterior
-#GeneBoxplot(rmcov.collapse, "ABCA1")
-#GeneBoxplot(rmcov.collapse, "MARC1")
-#GeneBoxplot(rmcov.collapse, "CD27")
-#GeneBoxplot(rmcov.collapse, "SERPINE2")
-
-##Patient vs. Carrier Posterior
-#GeneBoxplot(rmcov.collapse, "NOV")
-#GeneBoxplot(rmcov.collapse, "CORO1C")
-#GeneBoxplot(rmcov.collapse, "LBH")
-#GeneBoxplot(rmcov.collapse, "RALGDS")
-
-##Shared Posterior
-#GeneBoxplot(rmcov.collapse, "MARC1")
-#GeneBoxplot(rmcov.collapse, "NUP214")
-
-##Shared Log Fold
-#GeneBoxplot(rmcov.collapse, "MMP9")
-#GeneBoxplot(rmcov.collapse, "ANPEP")
-
-##Miscellaneous
-#GeneBoxplot(rmcov.collapse, "ZNF746")
-#Pheno table
-#pdata.final <- pData(rmcov.collapse)[,-ncol(pData(rmcov.collapse))] 
-#pdata.age <- group_by(pdata.final, Status) %>% summarise(Age = mean(Age)) 
-#status.all <- as.matrix(table(pdata.final$Status))
-#status.male <- filter(pdata.final, Sex == "MALE") %>% group_by(Status) %>% summarise(Male = n())
-#status.female <- filter(pdata.final, Sex == "FEMALE") %>% group_by(Status) %>% summarise(Female = n())
-#table.csv <- data.frame(Group = c("Carrier", "Control", "Patient", "Total"), Total = c(status.all, sum(status.all)), Male = c(status.male$Male, sum(status.male$Male)), Female = c(status.female$Female, sum(status.female$Female)), Age = c(round(pdata.age$Age, 2), round(mean(pdata.age$Age), 2)))
-
-#write_csv(table.csv, "../../FRDA poster/subjects.csv")
-
-#dlk1.interactors <- read_tsv("../dlk1_interactors.txt") %>% data.frame %>% select(Official.Symbol.Interactor.A, Official.Symbol.Interactor.B)
-#dlk1.unique <- c(dlk1.interactors$Official.Symbol.Interactor.A, dlk1.interactors$Official.Symbol.Interactor.B) %>% unique
-
-#de.dlk1 <- filter(table.annot, Symbol %in% dlk1.unique)  
-#gaa.dlk1 <- filter(bf.gaa.table, Symbol %in% dlk1.unique)  
-
-#model.cov <- model.matrix(~ Sex + Age, data = pData(combat.collapse)) #Create model matrix of covariates to be removed
-
-#rmcov.expr <- removeBatchEffect(exprs(combat.collapse), covariates = model.cov[,-1]) #Remove the effects of covariates, with the difference in diagnoses being supplied as the design argument to preserve those group differences
-#testdiff <- abs(rmcov.collapse.expr - rmcov.expr)
-#SaveRDSgz(rmcov.lumi, file = "./save/rmcov.lumi.rda")
-
-##Collapse the data by symbol
-#rmcov.collapse.expr <- collapseRows(exprs(rmcov.lumi), getSYMBOL(featureNames(rmcov.lumi), 'lumiHumanAll.db'), rownames(rmcov.lumi)) #collapseRows by symbol
-#rmcov.collapse <- ExpressionSet(assayData = rmcov.collapse.expr$datETcollapsed, phenoData = phenoData(rmcov.lumi))
-#SaveRDSgz(rmcov.collapse, file = "./save/rmcov.collapse.rda")
-
-#model.design <- model.matrix(~ 0 + Status, pData(rmcov.collapse)) #Make covariate matrix for limma
-#colnames(model.design) %<>% str_replace("Status", "")
-#SaveRDSgz(model.design, file = "./save/model.design.rda")
-
-##Limma fit
-#fit <- lmFit(rmcov.collapse, model.design)
-#fit$df.residual <- (fit$df.residual - 5)
-
-#contrasts.anova <- makeContrasts(cc = Carrier - Control, pco = Patient - Control, pca = Patient - Carrier, levels = model.design)
-#fit.anova <- contrasts.fit(fit, contrasts.anova)
-#fitb <- eBayes(fit.anova)
-
-##Create DE table
-##Make top tables for each coefficient
-#toptable.cc <- topTable(fitb, coef = 1, n = Inf) %>% select(AveExpr, logFC, t:B)
-#colnames(toptable.cc)[2:ncol(toptable.cc)] %<>% str_c(".cc")
-#toptable.cc$Symbol <- rownames(toptable.cc)
-
-#toptable.pco <- topTable(fitb, coef = 2, n = Inf) %>% select(AveExpr, logFC, t:B)
-#colnames(toptable.pco)[2:ncol(toptable.pco)] %<>% str_c(".pco")
-#toptable.pco$Symbol <- rownames(toptable.pco)
-
-#toptable.pca <- topTable(fitb, coef = 3, n = Inf) %>% select(AveExpr, logFC, t:B)
-#colnames(toptable.pca)[2:ncol(toptable.pca)] %<>% str_c(".pca")
-#toptable.pca$Symbol <- rownames(toptable.pca)
-
-#SaveRDSgz(toptable.pco, "./save/toptable.pco.rda")
-#SaveRDSgz(toptable.pca, "./save/toptable.pca.rda")
-#SaveRDSgz(toptable.cc, "./save/toptable.cc.rda")
