@@ -111,37 +111,58 @@ MDSPlot <- function(filename, dataset, targetset, colorscheme = "none", variable
     dev.off()
 }
 
-CollinearityScatterplot <- function(pdata.df, x.variable, y.variable, plot.prefix, plot.width = 6, plot.height = 6) {
+CollinearityScatterplot <- function(pdata.df, x.variable, y.variable, plot.width = 6, plot.height = 6) {
     scatterplot <- ggplot(pdata.df, aes_string(x = x.variable, y = y.variable)) + 
         geom_point() + 
+        geom_smooth(method = "lm") +
         theme_bw() + 
-        theme(panel.grid.major = element_blank()) +
-        theme(panel.grid.minor = element_blank()) + 
-        theme(plot.background = element_blank()) +
-        theme(plot.title = element_text(hjust = 0.5)) +
+        theme(panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              plot.background = element_blank(),
+              plot.title = element_text(hjust = 0.5)) +
         ggtitle(str_c(x.variable, " vs. ", y.variable))
 
-    filename <- str_c(plot.prefix, x.variable, "vs.", y.variable, "scatterplot.pdf", sep = "_")
+    filename <- str_c(x.variable, "vs.", y.variable, "scatterplot.pdf", sep = "_")
     CairoPDF(filename, height = plot.width, width = plot.height, bg = "transparent")
     plot(scatterplot)
     dev.off()
 }
 
-CollinearityBoxplot <- function(pdata.df, x.variable, y.variable, plot.prefix, plot.width = 6, plot.height = 6) {
-    scatterplot <- ggplot(pdata.df, aes_string(x = x.variable, y = y.variable)) + 
-        geom_boxplot() + 
+CollinearityViolinPlot <- function(pdata.df, x.variable, y.variable, plot.width = 5.5, plot.height = 5) {
+    violinplot <- ggplot(pdata.df, aes_string(x = x.variable, y = y.variable, fill = x.variable)) + 
+        geom_violin(scale = "width", trim = FALSE, draw_quantiles = c(0.05, 0.5, 0.95)) +
         theme_bw() + 
-        theme(panel.grid.major = element_blank()) +
-        theme(panel.grid.minor = element_blank()) + 
-        theme(plot.background = element_blank()) +
-        theme(plot.title = element_text(hjust = 0.5)) +
+        theme(axis.title.x = element_blank(),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              plot.background = element_blank(),
+              plot.title = element_text(hjust = 0.5)) +
         ggtitle(str_c(x.variable, " vs. ", y.variable))
 
-    filename <- str_c(plot.prefix, x.variable, "vs.", y.variable, "boxplot.pdf", sep = "_")
-    CairoPDF(filename, height = plot.width, width = plot.height, bg = "transparent")
-    plot(scatterplot)
+    filename <- str_c(x.variable, "vs.", y.variable, "boxplot.pdf", sep = "_")
+    CairoPDF(filename, height = plot.height, width = plot.width, bg = "transparent")
+    plot(violinplot)
     dev.off()
 }
+
+CollinearityBoxplot <- function(pdata.df, x.variable, y.variable, plot.width = 5.5, plot.height = 5) {
+    p <- ggplot(pdata.df, aes_string(x = x.variable, y = y.variable, fill = x.variable)) + 
+        geom_boxplot() +
+        theme_bw() + 
+        theme(axis.title.x = element_blank(),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              plot.background = element_blank(),
+              plot.title = element_text(hjust = 0.5),
+              legend.position = "none") +
+        ggtitle(str_c(x.variable, " vs. ", y.variable))
+
+    filename <- str_c(x.variable, "vs.", y.variable, "boxplot.pdf", sep = "_")
+    CairoPDF(filename, height = plot.height, width = plot.width, bg = "transparent")
+    plot(p)
+    dev.off()
+}
+
 
 DensityPlot <- function(pdata.df, variable.name) {
     p <- ggplot(pdata.df, aes_string(variable.name)) + 
@@ -166,7 +187,7 @@ HistogramPlot <- function(pdata.df, variable.name) {
               panel.grid.minor = element_blank(),
               plot.background = element_blank(),
               plot.title = element_text(hjust = 0.5)) +
-        xlab(variable.name)
+        xlab(variable.name) + ylab("Number of Subjects")
      
     CairoPDF(str_c(variable.name, "_histogram"), height = 5, width = 9, bg = "transparent")
     print(p)
@@ -174,25 +195,17 @@ HistogramPlot <- function(pdata.df, variable.name) {
 }
 
 GetCollinearity <- function(pdata.df) {
-    age.gaa <- regressionBF(GAA1 ~ Age, data = pdata.df) %>% extractBF %>% extract2("bf")
-    sex.gaa <- anovaBF(GAA1 ~ Sex, pdata.df) %>% extractBF %>% extract2("bf")
-    site.gaa <- anovaBF(GAA1 ~ Site, pdata.df) %>% extractBF %>% extract2("bf")
-    batch.gaa <- anovaBF(GAA1 ~ Batch, pdata.df) %>% extractBF %>% extract2("bf")
-    RIN.gaa <- regressionBF(GAA1 ~ RIN, pdata.df) %>% extractBF %>% extract2("bf")
-    FDS.gaa <- regressionBF(GAA1 ~ FDS, pdata.df) %>% extractBF %>% extract2("bf")
-    duration.gaa <- regressionBF(GAA1 ~ Duration, pdata.df) %>% extractBF %>% extract2("bf")
+    age.FDS <- regressionBF(FDS ~ Age, data = pdata.df) %>% extractBF %>% extract2("bf")
+    sex.FDS <- anovaBF(FDS ~ Sex, pdata.df) %>% extractBF %>% extract2("bf")
+    site.FDS <- anovaBF(FDS ~ Site, pdata.df) %>% extractBF %>% extract2("bf")
+    batch.FDS <- anovaBF(FDS ~ Batch, pdata.df) %>% extractBF %>% extract2("bf")
+    RIN.FDS <- regressionBF(FDS ~ RIN, pdata.df) %>% extractBF %>% extract2("bf")
+    duration.FDS <- regressionBF(FDS ~ Duration, pdata.df) %>% extractBF %>% extract2("bf")
 
-    age.fds <- regressionBF(FDS ~ Age, data = pdata.df) %>% extractBF %>% extract2("bf")
-    duration.fds <- regressionBF(FDS ~ Duration, data = pdata.df) %>% extractBF %>% extract2("bf")
+    comparison.vector <- c("Age x FDS", "Sex x FDS", "Site x FDS", "Batch x FDS", 
+                           "RIN x FDS", "Duration x FDS")
 
-    duration.age <- regressionBF(Duration ~ Age, data = pdata.df) %>% extractBF %>% extract2("bf")
-
-    comparison.vector <- c("Age x GAA1", "Sex x GAA1", "Site x GAA1", "Batch x GAA1", 
-                           "RIN x GAA1", "FDS x GAA1", "Duration x GAA1", 
-                           "Age x FDS", "Duration x FDS", "Duration x Age")
-
-    BF.vector <- c(age.gaa, sex.gaa, site.gaa, batch.gaa, RIN.gaa, FDS.gaa, duration.gaa, 
-                   age.fds, duration.fds, duration.age) %>% log10 %>% signif(3)
+    BF.vector <- c(age.FDS, sex.FDS, site.FDS, batch.FDS, RIN.FDS, duration.FDS) %>% log10 %>% signif(3)
     bf.tibble <- tibble(Comparison = comparison.vector, BF = BF.vector)
     bf.tibble
 }
@@ -214,10 +227,7 @@ FDSBayes <- function(gene.name, expr.matrix, trait.df) {
     trait.anova <- lmBF(Gene ~ FDS + Sex + RIN, data = trait.df) 
     notrait.anova <- lmBF(Gene ~ Sex + RIN, data = trait.df) 
     combined <- c(trait.anova, notrait.anova)
-    saveRDS(combined, str_c("./save/model/", gene.name), compress = FALSE)
-    set.seed(12345)
-    trait.posterior <- posterior(trait.anova, iterations = 10000) 
-    saveRDS(trait.posterior, str_c("./save/posterior/", gene.name), compress = FALSE)
+    combined
 }
 
 GAABayes <- function(gene.name, expr.matrix, trait.df) {
@@ -227,10 +237,7 @@ GAABayes <- function(gene.name, expr.matrix, trait.df) {
     trait.anova <- lmBF(Gene ~ GAA1 + Sex + RIN, data = trait.df) 
     notrait.anova <- lmBF(Gene ~ Sex + RIN, data = trait.df) 
     combined <- c(trait.anova, notrait.anova)
-    saveRDS(combined, str_c("./save/model/", gene.name), compress = FALSE)
-    set.seed(12345)
-    trait.posterior <- posterior(trait.anova, iterations = 10000) 
-    saveRDS(trait.posterior, str_c("./save/posterior/", gene.name), compress = FALSE)
+    combined
 }
 
 DurationBayes <- function(gene.name, expr.matrix, trait.df) {
@@ -240,10 +247,22 @@ DurationBayes <- function(gene.name, expr.matrix, trait.df) {
     trait.anova <- lmBF(Gene ~ Duration + Sex + RIN, data = trait.df) 
     notrait.anova <- lmBF(Gene ~ Sex + RIN, data = trait.df) 
     combined <- c(trait.anova, notrait.anova)
-    saveRDS(combined, str_c("./save/model/", gene.name), compress = FALSE)
+    combined
+}
+
+GetPosteriorProbability <- function(model.pheno, variable, n.iterations) {
+    variable.column <- str_c(variable, "-", variable)
     set.seed(12345)
-    trait.posterior <- posterior(trait.anova, iterations = 10000) 
-    saveRDS(trait.posterior, str_c("./save/posterior/", gene.name), compress = FALSE)
+    posterior.model <- posterior(model.pheno, index = 1, iterations = n.iterations)
+    posterior.variable <- posterior.model[,variable.column]
+    median.posterior <- median(posterior.variable)
+
+    if (sign(median.posterior) > 0) {
+        pp.variable <- length(which(posterior.variable > 0)) / n.iterations
+    } else {
+        pp.variable <- length(which(posterior.variable < 0)) / n.iterations
+    }
+    c(coef.variable = median.posterior, pp.variable = pp.variable)
 }
 
 BayesPlot <- function(gene.df, filename, threshold, plot.title, posterior.column = "Posterior", log.column = "logFC", xlabel = "Log Fold Change", ylabel = "Posterior Probability") {
@@ -264,21 +283,27 @@ BayesPlot <- function(gene.df, filename, threshold, plot.title, posterior.column
         ggtitle(plot.title) + 
         scale_color_manual(values = c("gray", "blue"))
 
-    CairoPDF(filename, width = 6, height = 6, bg = "transparent")
+    CairoPDF(filename, width = 5, height = 5, bg = "transparent")
     print(p)
     dev.off()
 }
 
 BayesWorkbook <- function(de.table, filename) { 
-    pval.cols <- colnames(de.table) %>% str_detect("Log.Bayes.Factor") %>% which
-    cor.cols <- colnames(de.table) %>% str_detect("Median") %>% which
+    bf.cols <- colnames(de.table) %>% str_detect("Log.Bayes.Factor") %>% which
+    pp.cols <- colnames(de.table) %>% str_detect("pp") %>% which
+    cor.cols <- colnames(de.table) %>% str_detect("coef") %>% which
 
     wb <- createWorkbook()
     addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
     writeDataTable(wb = wb, sheet = 1, x = de.table)
     sig.pvalues <- createStyle(fontColour = "red")
-    conditionalFormatting(wb, 1, cols = pval.cols, rows = 1:nrow(de.table), rule = ">0.5", style = sig.pvalues)
-    conditionalFormatting(wb, 1, cols = cor.cols, rows = 1:nrow(de.table), style = c("#63BE7B", "white", "red"), type = "colourScale")
+    conditionalFormatting(wb, 1, cols = bf.cols, rows = 1:nrow(de.table), 
+                          rule = ">0.5", style = sig.pvalues)
+    conditionalFormatting(wb, 1, cols = pp.cols, rows = 1:nrow(de.table), 
+                          rule = ">0.95", style = sig.pvalues)
+    conditionalFormatting(wb, 1, cols = cor.cols, rows = 1:nrow(de.table), 
+                          style = c("#63BE7B", "white", "red"), type = "colourScale")
+
     setColWidths(wb, 1, cols = 1, widths = "auto")
     setColWidths(wb, 1, cols = 2, widths = 45)
     setColWidths(wb, 1, cols = 3:ncol(de.table), widths = 15)
@@ -328,42 +353,60 @@ EnrichrWorkbook <- function(database, full.df, colname) {
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-EnrichrPlot <- function(enrichr.df, filename, plot.title, plot.height = 5, plot.width = 8, color = "default") {
+EnrichrPlot <- function(enrichr.df, enrichr.expr, prefix, plot.title, plot.height = 5, plot.width = 8) {
     enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% 
         map(unlist) %>% map_int(length)
-    enrichr.df$Term %<>% str_replace_all("\\ \\(GO.*$", "") %>% 
-        str_replace_all("\\_Homo.*$", "") %>% 
-        str_replace_all(",.*$", "")  #Remove any thing after the left parenthesis and convert to all lower case
+    enrichr.updown <- map(enrichr.df$Genes, UpDown, enrichr.expr) %>% reduce(rbind)
+    colnames(enrichr.updown) <- c("Down", "Up")
+
+    enrichr.df <- cbind(enrichr.df, enrichr.updown)
+    enrichr.df$Log.Up <- enrichr.df$Log.Bayes.Factor * enrichr.df$Up / enrichr.df$Gene.Count
+    enrichr.df$Log.Down <- enrichr.df$Log.Bayes.Factor * enrichr.df$Down / enrichr.df$Gene.Count
+    enrichr.df$Term %<>% str_replace_all("\\ \\(.*$", "") %>% 
+        str_replace_all("\\_Homo.*$", "") #%>% tolower #Remove any thing after the left parenthesis and convert to all lower case
     enrichr.df$Format.Name <- str_c(enrichr.df$Database, ": ", enrichr.df$Term, " (", enrichr.df$Gene.Count, ")")
     enrichr.df %<>% arrange(Log.Bayes.Factor)
     enrichr.df$Format.Name %<>% factor(levels = enrichr.df$Format.Name)
-    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.Bayes.Factor)  
+    enrichr.df.plot <- select(enrichr.df, Format.Name, Log.Up, Log.Down) %>% 
+        gather(Direction, Length, -Format.Name) 
 
-    p <- ggplot(enrichr.df.plot, aes(Format.Name, Log.Bayes.Factor)) + 
-         geom_bar(stat = "identity") + 
-         coord_flip() + 
-         theme_bw() + 
-         theme(legend.position = "none", 
-               panel.grid.major = element_blank(),
-               panel.grid.minor = element_blank(),
-               panel.border = element_rect(color = "black", size = 1),
-               plot.background = element_blank(),
-               plot.title = element_text(hjust = 0.5),
-               axis.title.y = element_blank(), 
-               axis.ticks.y = element_blank()) + 
-        ylab("logBF") + 
-        ggtitle(plot.title)
+    p <- ggplot(enrichr.df.plot, aes(Format.Name, Length, fill = Direction))  + 
+        geom_bar(stat = "identity", size = 1)  + 
+        scale_fill_discrete(name = "Direction", labels = c("Up", "Down")) + 
+        coord_flip() + 
+        theme_bw() + 
+        theme(panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank(),
+              panel.border = element_rect(color = "black", size = 1),  
+              plot.background = element_blank(), 
+              plot.title = element_text(hjust = 0.5),
+              legend.background = element_blank(), 
+              axis.title.y = element_blank(), 
+              axis.ticks.y = element_blank(), 
+              axis.text.y = element_text(size = 12)) +
+        ylab("logBF") + ggtitle(plot.title)
 
-    CairoPDF(str_c(filename, ".enrichr"), height = plot.height, width = plot.width, bg = "transparent")
+    CairoPDF(str_c(prefix, ".enrichr"), height = plot.height, width = plot.width, bg = "transparent")
     print(p)
     dev.off()
 }
 
+UpDown <- function(filter.vector, enrichr.df) {
+    split.vector <- str_split(filter.vector, ",")[[1]]
+    enrichr.filter <- filter(enrichr.df, Symbol %in% split.vector)
+    enrichr.vector <- c("Up" = length(which(sign(enrichr.filter$Median) == 1)), 
+                        "Down" = length(which(sign(enrichr.filter$Median) == -1)))
+    enrichr.vector
+}
+
 source("../../code/common_functions.R")
 
-lumi.import <- ReadRDSgz(file = "../baseline_lumi/save/lumi.baseline.rda")
+test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
+names(test) <- ls()
+unlist(test) %>% sort
+
+lumi.import <- ReadRDSgz(file = "../differential_expression/save/lumi.baseline.rda")
 patient.pheno <- pData(lumi.import) %>% as_tibble %>% filter(Status == "Patient")
-write.xlsx(patient.pheno, "patient_pheno.xlsx")
 lumi.patient <- lumi.import[,lumi.import$Status == "Patient" & 
                             !is.na(lumi.import$GAA1) & 
                             !is.na(lumi.import$GAA2) &
@@ -438,23 +481,23 @@ MDSPlot("mds_batch_combat", mds.patient.combat, pData(lumi.combat), as.character
 combat.collapse.expr <- collapseRows(exprs(lumi.combat), getSYMBOL(featureNames(lumi.combat), 'lumiHumanAll.db'), 
                               rownames(lumi.combat))$datETcollapsed
 combat.collapse <- ExpressionSet(assayData = combat.collapse.expr, phenoData = phenoData(lumi.combat))
-SaveRDSgz(export.lumi, "./save/combat.collapse.rda")
+SaveRDSgz(combat.collapse, "./save/combat.collapse.rda")
 
-#Annotate top table
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(featureNames(export.lumi)), mart = ensembl)
-bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
-colnames(bm.table) <- c("Symbol", "Definition")
-bm.table %<>% filter(!duplicated(Symbol))
 
 #Check for collinearity 
-#DensityPlot(pData(lumi.rmout), "Duration")
-#DensityPlot(pData(lumi.rmout), "GAA1")
-#HistogramPlot(fds.known, "FDS")
+collinearity <- GetCollinearity(pData(combat.collapse))
+DensityPlot(pData(combat.collapse), "Duration")
+DensityPlot(pData(combat.collapse), "GAA1")
+HistogramPlot(pData(combat.collapse), "FDS")
 
-#CollinearityScatterplot(pData(lumi.rmout), "GAA1", "Age", "all_patients")
-#CollinearityScatterplot(pData(lumi.rmout), "Duration", "Age", "all_patients")
-#CollinearityScatterplot(pData(lumi.rmout), "FDS", "Age", "all_patients")
+CollinearityScatterplot(pData(combat.collapse), "GAA1", "Age")
+CollinearityScatterplot(pData(combat.collapse), "Duration", "Age")
+CollinearityScatterplot(pData(combat.collapse), "FDS", "Age")
+CollinearityScatterplot(pData(combat.collapse[,combat.collapse$RIN > 5]), "FDS", "RIN")
+
+CollinearityViolinPlot(pData(combat.collapse), "Sex", "FDS")
+CollinearityViolinPlot(pData(combat.collapse), "Site", "FDS")
+CollinearityBoxplot(pData(combat.collapse), "Batch", "FDS")
 
 #Remove effects of covariates
 catch <- mclapply(featureNames(combat.collapse), CovarBayes, exprs(combat.collapse), select(pData(combat.collapse), Age), mc.cores = 8)
@@ -471,32 +514,36 @@ exprs(rmcov.lumi) <- rmcov.collapse.expr #Transfer cleaned expression values int
 SaveRDSgz(rmcov.lumi, "./save/rmcov.lumi.rda")
 
 #Get FDS regression
-catch <- mclapply(featureNames(rmcov.lumi), FDSBayes, exprs(rmcov.lumi), 
+model.fds <- mclapply(featureNames(rmcov.lumi), FDSBayes, exprs(rmcov.lumi), 
                   select(pData(rmcov.lumi), FDS, Sex, RIN), mc.cores = 8)
-model.fds <- list.files("./save/model", full.names = TRUE) %>% map(readRDS) 
+names(model.fds) <- featureNames(rmcov.lumi)
 SaveRDSgz(model.fds, "./save/model.fds.rda")
 bf.fds <- map(model.fds, extractBF) %>%
     map(extract2, "bf") %>% 
     map_dbl(reduce, divide_by) %>% log10
 bf.fds.df <- tibble(Symbol = featureNames(rmcov.lumi), Log.Bayes.Factor = bf.fds)
-posterior.fds <- list.files("./save/posterior", full.names = TRUE) %>% map(readRDS)
-SaveRDSgz(posterior.fds, "./save/posterior.fds.rda")
 
-posterior.fds.df <- map(posterior.fds, magrittr::extract, TRUE, 2) %>% 
-    map(quantile, c(0.025, 0.5, 0.975)) %>% 
-    reduce(rbind) %>% as.tibble %>%
-    set_colnames(c("CI_2.5", "Median", "CI_97.5")) %>%
-    mutate(Symbol = featureNames(export.lumi))
-bf.fds.final.df <- left_join(posterior.fds.df, bf.fds.df) %>% 
-    select(Symbol, Log.Bayes.Factor, CI_2.5, Median, CI_97.5) %>%
-    arrange(desc(Log.Bayes.Factor)) 
-bf.fds.sig <- filter(bf.fds.final.df, Log.Bayes.Factor > 0.5) %>% arrange(desc(abs(Median)))
-SaveRDSgz(bf.fds.posterior.df, "./save/bf.fds.posterior.df.rda")
 
-bf.fds.annot <- left_join(bf.fds.final.df, bm.table) %>% 
-    select(Symbol, Definition, Log.Bayes.Factor, Median, CI_2.5, CI_97.5)
+fds.pp <- mclapply(model.fds, GetPosteriorProbability, "FDS", 10000, mc.cores = 8) %>%
+    reduce(rbind) %>% as_tibble
+colnames(fds.pp) <- c("coef.FS", "pp.FS")
+fds.pp$Symbol <- featureNames(rmcov.lumi)
+
+#Annotate top table
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_symbol', values = as.character(featureNames(rmcov.lumi)), mart = ensembl)
+bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
+colnames(bm.table) <- c("Symbol", "Definition")
+bm.table %<>% filter(!duplicated(Symbol))
+
+bf.fds.annot <- left_join(bf.fds.df, fds.pp) %>% left_join(bm.table) %>%
+    select(Symbol, Definition, Log.Bayes.Factor, coef.FS, pp.FS) %>%
+    arrange(desc(Log.Bayes.Factor))
+SaveRDSgz(bf.fds.annot, "./save/bf.fds.annot.rda")
+bf.fds.sig <- filter(bf.fds.annot, Log.Bayes.Factor > 0.5 & pp.FS > 0.95)
+bf.fds.fdr <- mean(1 - bf.fds.sig$pp.FS)
 BayesWorkbook(bf.fds.annot, "bf.fds.xlsx")
-BayesPlot(bf.fds.final.df, "fds_uplot", 0.5, "Functional Stage", "Log.Bayes.Factor", "Median", 
+BayesPlot(bf.fds.annot, "fds_uplot", 0.5, "Functional Stage", "Log.Bayes.Factor", "Median", 
           "Regression Coefficient", "Log Bayes Factor")
 
 #Get GAA regression
@@ -604,5 +651,5 @@ fds.reactome.final <- slice(fds.reactome, c(1,4))
 fds.kegg.final <- slice(fds.kegg, 3)
 
 fds.enrichr.final <- rbind(fds.gobiol.final, fds.gomole.final, fds.reactome.final, fds.kegg.final)
-EnrichrPlot(fds.enrichr.final, "fds", plot.height = 4, plot.width = 6, maintitle = "Functional Stage", "blue")
+EnrichrPlot(fds.enrichr.final, bf.fds.final.df,  "fds", plot.height = 4, plot.width = 8, plot.title = "Functional Stage")
 

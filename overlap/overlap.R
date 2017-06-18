@@ -1,30 +1,15 @@
 #For DE analysis
 library(lumi)
 library(WGCNA) #for fastcor
-library(RRHO)
+#library(RRHO)
 library(BayesFactor)
-library(siggenes)
 
-#Data arrangement
-library(plyr) #only for revalue
-library(dplyr)
-library(tidyr)
-
-#Functional programming
-library(magrittr)
-library(purrr)
-#library(vadr)
-
-#String operations
-library(stringr)
-
-#Plotting
 library(Cairo)
-library(ggplot2)
-
-#Reading and writing tables
-library(readr)
 library(openxlsx)
+
+library(magrittr)
+library(stringr)
+library(tidyverse)
 
 source("../common_functions.R")
 

@@ -124,6 +124,41 @@ CovarBayes <- function(gene.name, expr.matrix, trait.df) {
     saveRDS(trait.posterior, str_c("./save/posterior/", gene.name), compress = FALSE)
 }
 
+CollinearityBoxplot <- function(pdata.df, x.variable, y.variable, plot.width = 5.5, plot.height = 5) {
+    scatterplot <- ggplot(pdata.df, aes_string(x = x.variable, y = y.variable, fill = x.variable)) + 
+        geom_violin(scale = "width", trim = FALSE, draw_quantiles = c(0.05, 0.5, 0.95)) +
+        theme_bw() + 
+        theme(axis.title.x = element_blank(),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              plot.background = element_blank(),
+              plot.title = element_text(hjust = 0.5)) +
+        ggtitle(str_c(x.variable, " vs. ", y.variable))
+
+    filename <- str_c(x.variable, "vs.", y.variable, "boxplot.pdf", sep = "_")
+    CairoPDF(filename, height = plot.height, width = plot.width, bg = "transparent")
+    plot(scatterplot)
+    dev.off()
+}
+
+CollinearityBarplot <- function(pdata.df, x.variable, y.variable, plot.width = 4.5, plot.height = 5) {
+    scatterplot <- ggplot(pdata.df, aes_string(x = x.variable, fill = y.variable)) + 
+        geom_bar(color = "black") +
+        theme_bw() + 
+        theme(axis.title.x = element_blank(),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              plot.background = element_blank(),
+              plot.title = element_text(hjust = 0.5)) +
+        ggtitle(str_c(x.variable, " vs. ", y.variable)) +
+        ylab("Number of Subjects")
+
+    filename <- str_c(x.variable, "vs.", y.variable, "barplot.pdf", sep = "_")
+    CairoPDF(filename, height = plot.height, width = plot.width, bg = "transparent")
+    plot(scatterplot)
+    dev.off()
+}
+
 DEBayes <- function(gene.name, expr.matrix, trait.df) {
     gene.vector <- expr.matrix[gene.name,]
     trait.df <- data.frame(trait.df, Gene = gene.vector)
@@ -141,6 +176,7 @@ DEBayes <- function(gene.name, expr.matrix, trait.df) {
 DEWorkbook <- function(de.table, filename) { 
     bf.cols <- colnames(de.table) %>% str_detect("Log.Bayes.Factor") %>% which
     logFC.cols <- colnames(de.table) %>% str_detect("logFC") %>% which
+    pp.cols <- colnames(de.table) %>% str_detect("pp") %>% which
 
     wb <- createWorkbook()
     addWorksheet(wb = wb, sheetName = "Sheet 1", gridLines = TRUE)
@@ -149,6 +185,8 @@ DEWorkbook <- function(de.table, filename) {
     sig.bf <- createStyle(fontColour = "red")
     conditionalFormatting(wb, 1, cols = bf.cols, 
                           rows = 1:nrow(de.table), rule = ">0.5", style = sig.bf)
+    conditionalFormatting(wb, 1, cols = pp.cols, 
+                          rows = 1:nrow(de.table), rule = ">0.95", style = sig.bf)
     conditionalFormatting(wb, 1, cols = logFC.cols, 
                           rows = 1:nrow(de.table), style = c("#63BE7B", "white", "red"), 
                           type = "colourScale")
@@ -182,7 +220,7 @@ BayesPlot <- function(bayes.df, filename, plot.title, diff.column, log.column = 
          xlab(xlabel) + ylab(expression(paste(Log[10], " Bayes Factor"))) + 
          ggtitle(plot.title) 
 
-    CairoPDF(filename, width = 6, height = 6, bg = "transparent")
+    CairoPDF(filename, width = 5, height = 5, bg = "transparent")
     print(p)
     dev.off()
 }
@@ -301,6 +339,57 @@ UpDown <- function(filter.vector, enrichr.df, prefix) {
     enrichr.vector
 }
 
+ExtractContrasts <- function(contrasts.vector) {
+    contrasts.lhs <- contrasts.vector[contrasts.vector == 1]
+    contrasts.rhs <- contrasts.vector[contrasts.vector == -1]
+    c(names(contrasts.lhs), names(contrasts.rhs))
+}
+
+GetLogFC <- function(contrasts.pair, median.estimates) {
+    logFC <- median.estimates[contrasts.pair[1]] - median.estimates[contrasts.pair[2]]
+    logFC
+}
+
+GetPosteriorProb <- function(contrasts.pair, logFC, gene.quantile, gene.estimates, n.iterations) {
+    if (sign(logFC) == 1) {
+        contrast.pp1 <- which(gene.estimates[[contrasts.pair[2]]] < gene.quantile[[contrasts.pair[1]]]["CI_lo"]) %>% length 
+        contrast.pp2 <- which(gene.estimates[[contrasts.pair[1]]] > gene.quantile[[contrasts.pair[2]]]["CI_hi"]) %>% length 
+        contrast.pp <- (contrast.pp1 + contrast.pp2) / (2*n.iterations)
+        return(contrast.pp)
+    } else {
+        contrast.pp1 <- which(gene.estimates[[contrasts.pair[2]]] > gene.quantile[[contrasts.pair[1]]]["CI_hi"]) %>% length 
+        contrast.pp2 <- which(gene.estimates[[contrasts.pair[1]]] < gene.quantile[[contrasts.pair[2]]]["CI_lo"]) %>% length 
+        contrast.pp <- (contrast.pp1 + contrast.pp2) / (2*n.iterations)
+        return(contrast.pp)
+    }
+}
+
+SplitContrasts <- function(column.index, contrasts.matrix) {
+    contrasts.matrix[,column.index]
+}
+
+PairwiseTest <- function(model.de, variable.name, probability, contrasts.matrix, n.iterations) {
+    set.seed(12345)
+    gene.posterior <- posterior(model.de, index = 1, iterations = n.iterations) %>% data.frame
+    gene.trait <- select(gene.posterior, mu, matches(str_c("^", variable.name)))
+    colnames(gene.trait) %<>% str_replace_all(str_c(variable.name, "\\."), "")
+
+    gene.full.estimate <- mutate_all(gene.trait, add, y = gene.trait$mu) %>% select(-mu)
+    gene.median <- colMedians(as.matrix(gene.full.estimate))
+    names(gene.median) <- colnames(gene.full.estimate)
+    contrasts.pairs <- apply(contrasts.matrix, 2, ExtractContrasts) %>% as.matrix
+    contrasts.list <- map(1:ncol(contrasts.pairs), SplitContrasts, contrasts.pairs)
+    logFC.pairs <- apply(contrasts.pairs, 2, GetLogFC, gene.median)
+    names(logFC.pairs) <- str_c("logFC.", colnames(contrasts.pairs))
+
+    gene.quantile <- map(gene.full.estimate, quantile, c(1-probability, probability)) %>% 
+        map(as.vector) %>% map(set_names, c("CI_lo", "CI_hi"))
+
+    contrasts.pp <- map2_dbl(contrasts.list, logFC.pairs, GetPosteriorProb, gene.quantile, gene.full.estimate, n.iterations)
+    names(contrasts.pp) <- str_c("pp.", colnames(contrasts.pairs))
+    c(logFC.pairs, contrasts.pp)
+}
+
 #Code for getting size of objects in memory
 objects.size <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(objects.size) <- ls()
@@ -317,16 +406,7 @@ intensities.list <- map(filenames, read_tsv) #Read files in to a list
 intensities.csv <- read_csv(filenames.csv)
 intensities.list %<>% list.append(intensities.csv)
 intensities.mat <- reduce(intensities.list, merge) #Merge all of the batches into one table
-write.table(intensities.mat, "../raw_data/all_batches.tsv", sep = "\t", row.names = FALSE) #Save table to disk
-
-#Read in raw data and remove unrelated samples
-lumi.raw <- lumiR("../raw_data/all_batches.tsv", lib.mapping = "lumiHumanIDMapping", checkDupId = TRUE, convertNuID = TRUE, QC = FALSE) #Read in the joined batches
-frda.key <- match(targets.final$Slide.ID, colnames(lumi.raw)) #Match sample names in targets table to samples in lumi object
-lumi.raw <- lumi.raw[,frda.key] #Subset lumi object to get rid of unrelated samples
-
-rownames(targets.final) <- targets.final$Slide.ID #Set the row names to be the same as the sampleID (may be unnecessary)
-pData(lumi.raw) <- targets.final #Add phenotype data
-SaveRDSgz(lumi.raw, "./save/lumi.raw.rda")
+write.table(intensities.mat, "../raw_data/all_batches.tsv", sep = "\t", row.names = FALSE) #Save table to disk #Read in raw data and remove unrelated samples lumi.raw <- lumiR("../raw_data/all_batches.tsv", lib.mapping = "lumiHumanIDMapping", checkDupId = TRUE, convertNuID = TRUE, QC = FALSE) #Read in the joined batches frda.key <- match(targets.final$Slide.ID, colnames(lumi.raw)) #Match sample names in targets table to samples in lumi object lumi.raw <- lumi.raw[,frda.key] #Subset lumi object to get rid of unrelated samples rownames(targets.final) <- targets.final$Slide.ID #Set the row names to be the same as the sampleID (may be unnecessary) pData(lumi.raw) <- targets.final #Add phenotype data SaveRDSgz(lumi.raw, "./save/lumi.raw.rda")
 
 #remove some duplicate arrays
 duplicate.slides <- c("6303230097_F", "7649540101_A", "6303248029_G", "9534190037_D", "3998573091_J", "3998573091_L", 
@@ -409,43 +489,12 @@ sex.all <- contingencyTableBF(Sex ~ Status, pData(combat.collapse)) %>% extractB
 batch.all <- contingencyTableBF(Batch ~ Status, pData(combat.collapse)) %>% extractBF
 site.all <- contingencyTableBF(Site ~ Status, pData(combat.collapse)) %>% extractBF
 
-p <- ggplot(pData(combat.collapse), aes(x = Status, y = Age, fill = Status)) + geom_violin() + geom_boxplot(width = 0.1) 
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "none")
-p <- p + theme(axis.title = element_blank()) + ggtitle(paste("Age (p < ", signif(age.all$p.value[1], 3), "*)", sep = ""))
-CairoPDF("./age_boxplot.pdf", height = 6, width = 6)
-plot(p)
-dev.off()
+CollinearityBoxplot(pData(combat.collapse), "Status", "Age")
+CollinearityBoxplot(pData(combat.collapse[,combat.collapse$RIN > 5]), "Status", "RIN")
 
-p <- ggplot(pData(lumi.rmout), aes(x = Status, y = RIN)) + geom_boxplot(width = 0.25) + geom_violin()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(axis.title = element_blank()) + ggtitle(paste("RIN (p < ", round(RIN.all$p.value[1], 3), ")", sep = ""))
-CairoPDF("./rin_boxplot.pdf", height = 3, width = 3)
-plot(p)
-dev.off()
-
-p <- ggplot(pData(lumi.rmout), aes(x = Status, fill = factor(Sex))) + geom_bar()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(axis.title = element_blank(), legend.title = element_blank()) 
-p <- p + ggtitle(paste("Sex (p < ", round(sex.all$p.value[1], 3), "*)", sep = "")) 
-CairoPDF("./sex_barplot.pdf", height = 3, width = 4)
-plot(p)
-dev.off()
-
-p <- ggplot(pData(lumi.rmout), aes(x = Status, fill = factor(Batch))) + geom_bar()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(axis.title = element_blank(), legend.position = "none") 
-p <- p + ggtitle(paste("Batch (p < ", round(batch.all$p.value[1], 3), "*)", sep = "")) 
-CairoPDF("./batch_barplot.pdf", height = 3, width = 3)
-plot(p)
-dev.off()
-
-p <- ggplot(pData(lumi.rmout), aes(x = Status, fill = factor(Site))) + geom_bar()
-p <- p + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-p <- p + theme(axis.title = element_blank(), legend.position = "none") 
-p <- p + ggtitle(paste("Batch (p < ", round(batch.all$p.value[1], 3), "*)", sep = "")) 
-CairoPDF("./site_barplot.pdf", height = 3, width = 3)
-plot(p)
-dev.off()
+CollinearityBarplot(pData(combat.collapse), "Status", "Sex")
+CollinearityBarplot(pData(combat.collapse), "Batch", "Status", plot.width = 8)
+CollinearityBarplot(pData(combat.collapse), "Site", "Status")
 
 #Remove effects of covariates
 catch <- mclapply(featureNames(combat.collapse), CovarBayes, exprs(combat.collapse), select(pData(combat.collapse), Sex, Age), mc.cores = 8)
@@ -464,6 +513,7 @@ SaveRDSgz(rmcov.lumi, "./save/rmcov.lumi.rda")
 #Differential Expression
 catch <- mclapply(featureNames(rmcov.lumi), DEBayes, exprs(rmcov.lumi), select(pData(rmcov.lumi), Status, RIN), mc.cores = 8)
 model.de <- list.files("./save/model", full.names = TRUE) %>% map(readRDS) 
+names(model.de) <- featureNames(rmcov.lumi)
 SaveRDSgz(model.de, "./save/model.de.rda")
 de.bf <- map(model.de, extractBF) %>% 
     map(extract2, "bf") %>% 
@@ -471,48 +521,36 @@ de.bf <- map(model.de, extractBF) %>%
     map_dbl(log10) %>% 
     signif(3)
 bf.df <- tibble(Symbol = featureNames(rmcov.lumi), Log.Bayes.Factor = de.bf) 
-posterior.status <- list.files("./save/posterior", full.names = TRUE) %>% map(readRDS)
-SaveRDSgz(posterior.status, "./save/posterior.status.rda")
 
-posterior.mu.df <- map(posterior.status, magrittr::extract, TRUE, 1) %>% 
-    map(quantile, c(0.025, 0.5, 0.975)) %>% 
-    reduce(rbind) %>% as.tibble %>%
-    set_colnames(c("mu_CI_2.5", "mu_Median", "mu_CI_97.5")) 
-posterior.carrier.df <- map(posterior.status, magrittr::extract, TRUE, 2) %>% 
-    map(quantile, c(0.025, 0.5, 0.975)) %>% 
-    reduce(rbind) %>% as.tibble %>%
-    set_colnames(c("Carrier_CI_2.5", "Carrier_Median", "Carrier_CI_97.5")) 
-posterior.control.df <- map(posterior.status, magrittr::extract, TRUE, 3) %>% 
-    map(quantile, c(0.025, 0.5, 0.975)) %>% 
-    reduce(rbind) %>% as.tibble %>%
-    set_colnames(c("Control_CI_2.5", "Control_Median", "Control_CI_97.5"))
-posterior.patient.df <- map(posterior.status, magrittr::extract, TRUE, 4) %>% 
-    map(quantile, c(0.025, 0.5, 0.975)) %>% 
-    reduce(rbind) %>% as.tibble %>%
-    set_colnames(c("Patient_CI_2.5", "Patient_Median", "Patient_CI_97.5")) 
+status.model <- model.matrix(~ 0 + Status, pData(rmcov.lumi))
+colnames(status.model) %<>% str_replace_all("Status", "")
+contrasts.matrix <- makeContrasts(pco = Patient - Control, pca = Patient - Carrier, cc = Carrier - Control, levels = status.model)
+
+bf.prob <- mclapply(model.de, PairwiseTest, "Status", 0.95, contrasts.matrix, 10000, mc.cores = 8)
+bf.prob.df <- reduce(bf.prob, rbind) %>% as_tibble
+bf.prob.df$Symbol <- featureNames(rmcov.lumi)
 
 ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), 
-                 filters = 'hgnc_symbol', 
-                 values = as.character(featureNames(rmcov.lumi)), 
-                 mart = ensembl)
+                  filters = 'hgnc_symbol', 
+                  values = as.character(bf.prob.df$Symbol), 
+                  mart = ensembl)
 bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
 colnames(bm.table) <- c("Symbol", "Definition")
 bm.table %<>% filter(!duplicated(Symbol))
 
-posterior.final.df <- cbind(bf.df, posterior.patient.df, posterior.carrier.df, posterior.control.df, posterior.mu.df) %>% 
-    as_tibble %>% 
-    mutate(logFC.pco = Patient_Median - Control_Median, 
-           logFC.pca = Patient_Median - Carrier_Median, 
-           logFC.cc = Carrier_Median - Control_Median, 
-           pco.diff = Patient_CI_2.5 > Control_CI_97.5 | Patient_CI_97.5 < Control_CI_2.5,
-           pca.diff = Patient_CI_2.5 > Carrier_CI_97.5 | Patient_CI_97.5 < Carrier_CI_2.5,
-           cc.diff = Carrier_CI_2.5 > Control_CI_97.5 | Carrier_CI_97.5 < Control_CI_2.5) %>%
-    mutate_if(is.numeric, signif, digits = 3) %>%
-    left_join(bm.table) %>%
-    select(Symbol, Definition, Log.Bayes.Factor, contains("logFC"), contains("diff"), 
-           contains("mu"), contains("Patient"), contains("Control"), contains("Carrier")) 
-bf.df.sig <- filter(posterior.final.df, Log.Bayes.Factor > 0.5)
+posterior.final.df <- left_join(bf.df, bf.prob.df) %>% left_join(bm.table) %>%
+    select(Symbol, Definition, Log.Bayes.Factor, contains("logFC"), contains("pp")) %>%
+    arrange(desc(abs(logFC.pco)))
+
+sig.pco <- filter(posterior.final.df, Log.Bayes.Factor > 0.5 & pp.pco > 0.95) 
+sig.pca <- filter(posterior.final.df, Log.Bayes.Factor > 0.5 & pp.pca > 0.95)
+sig.cc <- filter(posterior.final.df, Log.Bayes.Factor > 0.5 & pp.cc > 0.95)
+
+fdr.pco <- mean(1 - sig.pco$pp.pco)
+fdr.pca <- mean(1 - sig.pca$pp.pca)
+fdr.cc <- mean(1 - sig.cc$pp.cc)
+
 SaveRDSgz(posterior.final.df, "./save/posterior.final.df.rda")
 DEWorkbook(arrange(posterior.final.df, desc(Log.Bayes.Factor)), "table_annotated.xlsx")
 
@@ -539,13 +577,14 @@ vennDiagram(venn.matrix, include = c("up", "down"), counts.col = c("red", "green
 dev.off()
 
 #Load FDS regression
-bf.fds.table <- read.xlsx("../WGCNA_GAA/bf.fds.xlsx")
+bf.fds.table <- ReadRDSgz("../phenotype_regression/save/bf.fds.annot.rda")
 bf.fds.sig <- filter(bf.fds.table, Log.Bayes.Factor > 0.5)
 colnames(bf.fds.sig)[3] <- "Log.Bayes.Factor.fds"
+bf.df.sig <- filter(posterior.final.df, Log.Bayes.Factor > 0.5)
 shared.sig <- inner_join(bf.df.sig, bf.fds.sig) %>% 
     arrange(desc(abs(logFC.pco)))
 write.xlsx(shared.sig, "shared.sig.xlsx")
-write.xlsx(arrange(shared.sig, desc(abs(Median))), "shared.sig.fs.xlsx")
+write.xlsx(arrange(shared.sig, desc(abs(coef.FS))), "shared.sig.fs.xlsx")
 
 #Load WGCNA
 module.membership <- read.xlsx("../WGCNA/module_membership.xlsx")

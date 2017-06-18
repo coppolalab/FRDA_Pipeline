@@ -36,7 +36,7 @@ EigengeneScatterplot <- function(eigengene.df, fds.vector, module.size, color) {
     gene.df <- data.frame(FDS = fds.vector, Expression = as.vector(eigengene.df[[color.column]]))
 
     p <- ggplot(gene.df, aes(x = FDS, y = Expression)) + 
-         geom_point(col = color) + 
+         geom_point() + 
          stat_smooth(method = "lm", se = TRUE) +
          theme_bw() + 
          theme(legend.position = "none", 
@@ -50,7 +50,7 @@ EigengeneScatterplot <- function(eigengene.df, fds.vector, module.size, color) {
          xlab("Functional Stage") + ylab("Eigengene Value") + 
          ggtitle(str_c(capitalize(color), " Module (", module.size, " Transcripts)")) 
 
-    CairoPDF(str_c(color, ".pdf"), width = 6, height = 6, bg = "transparent")
+    CairoPDF(str_c(color, ".pdf"), width = 5, height = 5, bg = "transparent")
     print(p)
     dev.off()
 }
@@ -132,6 +132,7 @@ names(test) <- ls()
 unlist(test) %>% sort
 
 source("../../code/common_functions.R")
+combat.collapse <- ReadRDSgz("../phenotype_regression/save/combat.collapse.rda")
 
 #Calculate scale free topology measures for different values of power adjacency function
 powers <- c(c(1:10), seq(from = 12, to = 39, by = 2))
