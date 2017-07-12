@@ -10,7 +10,6 @@ library(BayesFactor)
 library(matrixStats)
 
 library(Cairo)
-library(heatmap.plus)
 library(openxlsx)
 
 library(tools)
@@ -31,12 +30,12 @@ EigengeneBayes <- function(gene.vector, trait.df) {
     combined
 }
 
-EigengeneScatterplot <- function(eigengene.df, fds.vector, module.size, color) {
-    color.column <- str_c("ME", color)
+EigengeneScatterplot <- function(eigengene.df, eigengene, fds.vector, module.size, color) {
+    color.column <- str_c("ME", eigengene)
     gene.df <- data.frame(FDS = fds.vector, Expression = as.vector(eigengene.df[[color.column]]))
 
     p <- ggplot(gene.df, aes(x = FDS, y = Expression)) + 
-         geom_point() + 
+         geom_point(color = color) + 
          stat_smooth(method = "lm", se = TRUE) +
          theme_bw() + 
          theme(legend.position = "none", 
@@ -48,9 +47,9 @@ EigengeneScatterplot <- function(eigengene.df, fds.vector, module.size, color) {
                plot.background = element_blank(),
                plot.title = element_text(hjust = 0.5)) +
          xlab("Functional Stage") + ylab("Eigengene Value") + 
-         ggtitle(str_c(capitalize(color), " Module (", module.size, " Transcripts)")) 
+         ggtitle(str_c(capitalize(eigengene), " Module (", module.size, " Transcripts)")) 
 
-    CairoPDF(str_c(color, ".pdf"), width = 5, height = 5, bg = "transparent")
+    CairoPDF(str_c(eigengene, ".pdf"), width = 5, height = 5, bg = "transparent")
     print(p)
     dev.off()
 }
@@ -90,7 +89,7 @@ EnrichrWorkbook <- function(database, full.df, colname) {
     saveWorkbook(wb, filename, overwrite = TRUE) 
 }
 
-EnrichrPlot <- function(enrichr.df, filename, plot.title, plot.height = 5, plot.width = 8, color = "default") {
+EnrichrPlot <- function(enrichr.df, filename, plot.title, plot.height = 5, plot.width = 8, color) {
     enrichr.df$Gene.Count <- map(enrichr.df$Genes, str_split, ",") %>% 
         map(unlist) %>% map_int(length)
     enrichr.df$Term %<>% str_replace_all("\\ \\(GO.*$", "") %>% 
@@ -102,17 +101,19 @@ EnrichrPlot <- function(enrichr.df, filename, plot.title, plot.height = 5, plot.
     enrichr.df.plot <- select(enrichr.df, Format.Name, Log.Bayes.Factor)  
 
     p <- ggplot(enrichr.df.plot, aes(Format.Name, Log.Bayes.Factor)) + 
-         geom_bar(stat = "identity") + 
+         geom_bar(stat = "identity", fill = color, color = "black") + 
          coord_flip() + 
          theme_bw() + 
          theme(legend.position = "none", 
                panel.grid.major = element_blank(),
                panel.grid.minor = element_blank(),
-               panel.border = element_rect(color = "black", size = 1),
+               panel.border = element_blank(),
                plot.background = element_blank(),
                plot.title = element_text(hjust = 0.5),
                axis.title.y = element_blank(), 
-               axis.ticks.y = element_blank()) + 
+               axis.text.y = element_text(size = 12),
+               axis.ticks.y = element_blank(),
+               axis.line.x = element_line()) + 
         ylab("logBF") + 
         ggtitle(plot.title)
 
@@ -125,6 +126,21 @@ GetKscaled <- function(gene.list, module.membership) {
     filter(module.membership, is.element(Symbol, gene.list)) %>% 
         select(Symbol, kscaled) %>% 
         arrange(desc(kscaled))
+}
+
+GetPosteriorProbability <- function(model.pheno, variable, n.iterations) {
+    variable.column <- str_c(variable, "-", variable)
+    set.seed(12345)
+    posterior.model <- posterior(model.pheno, index = 1, iterations = n.iterations)
+    posterior.variable <- posterior.model[,variable.column]
+    median.posterior <- median(posterior.variable)
+
+    if (sign(median.posterior) > 0) {
+        pp.variable <- length(which(posterior.variable > 0)) / n.iterations
+    } else {
+        pp.variable <- length(which(posterior.variable < 0)) / n.iterations
+    }
+    c(coef.variable = median.posterior, pp.variable = pp.variable)
 }
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
@@ -271,14 +287,12 @@ bayes.fds <- map(ME.genes.rmcov, EigengeneBayes, select(lumi.pdata, FDS, Sex, RI
 bf.fds <- map(bayes.fds, extractBF) %>% 
     map(extract2, "bf") %>% 
     map_dbl(reduce, divide_by) %>%
-    map_dbl(log10)
-set.seed(12345)
-posterior.fds <- map(bayes.fds, posterior, index = 1, iterations = 10000) 
-posterior.fds.medians <- map(posterior.fds, colMedians) %>% reduce(rbind) %>% 
-    set_colnames(make.names(colnames(posterior.fds[[1]]))) %>%
-    as_tibble %>% mutate(Module = names(posterior.fds), Log.Bayes.Factor = bf.fds) %>%
-    select(Module, Log.Bayes.Factor, mu:g_continuous) %>% mutate_if(is.numeric, signif, digits = 3) %>%
-    arrange(desc(Log.Bayes.Factor))
+    map_dbl(log10) 
+bf.fds.df <- tibble(Eigengene = names(bf.fds), logBF = bf.fds)
+
+fds.pp <- mclapply(bayes.fds, GetPosteriorProbability, "FDS", 10000, mc.cores = 8) %>%
+    reduce(rbind) %>% as_tibble %>% mutate(Eigengene = colnames(ME.genes.rmcov))
+bayes.fds.final <- left_join(bf.fds.df, fds.pp)
 
 #Generate network statistics
 all.degrees <- intramodularConnectivity(adjacency.expr, module.colors)
@@ -318,9 +332,9 @@ red.only <- filter(modules.only, Module == "red")
 yellow.only <- filter(modules.only, Module == "yellow")
 magenta.only <- filter(modules.only, Module == "magenta")
 
-EigengeneScatterplot(ME.genes.rmcov, lumi.pdata$FDS, nrow(red.only), "red")
-EigengeneScatterplot(ME.genes.rmcov, lumi.pdata$FDS, nrow(yellow.only), "yellow")
-EigengeneScatterplot(ME.genes.rmcov, lumi.pdata$FDS, nrow(magenta.only), "magenta")
+EigengeneScatterplot(ME.genes.rmcov, "red", lumi.pdata$FDS, nrow(red.only), "red")
+EigengeneScatterplot(ME.genes.rmcov, "yellow", lumi.pdata$FDS, nrow(yellow.only), "#DDDD00")
+EigengeneScatterplot(ME.genes.rmcov, "magenta", lumi.pdata$FDS, nrow(magenta.only), "#CC00CC")
 
 #Enrichr
 source("../../code/GO/enrichr.R")
@@ -361,7 +375,7 @@ red.kegg.final <- slice(red.kegg, 1)
 red.reactome.final <- slice(red.reactome, c(2,5))
 
 red.enrichr.final <- rbind(red.gobiol.final, red.gomole.final, red.kegg.final, red.reactome.final)
-EnrichrPlot(red.enrichr.final, "red", "Red Module", plot.height = 3, plot.width = 5.5, color = "black")
+EnrichrPlot(red.enrichr.final, "red", "Red Module", plot.height = 3, plot.width = 6.5, color = "red")
 
 yellow.gobiol.file <- "./enrichr/yellow/GO Biological Process.xlsx"
 yellow.gobiol <- read.xlsx(yellow.gobiol.file) 
@@ -388,7 +402,7 @@ yellow.kegg.final <- slice(yellow.kegg, 7)
 yellow.reactome.final <- slice(yellow.reactome, c(1,3,6))
 
 yellow.enrichr.final <- rbind(yellow.gobiol.final, yellow.gomole.final, yellow.kegg.final, yellow.reactome.final)
-EnrichrPlot(yellow.enrichr.final, "yellow", "Yellow Module", plot.height = 4, plot.width = 5, color = "black")
+EnrichrPlot(yellow.enrichr.final, "yellow", "Yellow Module", plot.height = 4, plot.width = 6, color = "#DDDD00")
 
 magenta.gobiol.file <- "./enrichr/magenta/GO Biological Process.xlsx"
 magenta.gobiol <- read.xlsx(magenta.gobiol.file) 
@@ -413,4 +427,4 @@ magenta.reactome.final <- slice(magenta.reactome, c(1,3))
 magenta.kegg.final <- slice(magenta.kegg, c(2,4))
 
 magenta.enrichr.final <- rbind(magenta.gobiol.final, magenta.gomole.final, magenta.reactome.final, magenta.kegg.final)
-EnrichrPlot(magenta.enrichr.final, "magenta", "Magenta Module", plot.height = 4, plot.width = 5, color = "black")
+EnrichrPlot(magenta.enrichr.final, "magenta", "Magenta Module", plot.height = 4, plot.width = 6, color = "#CC00CC")

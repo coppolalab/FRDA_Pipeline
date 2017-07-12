@@ -145,14 +145,7 @@ fds.df$sig.FDS <- fds.df$Log.Bayes.Factor > 0.5 & fds.df$pp.FS > 0.95
 #Vijay study
 vijay.heart <- ReadRDSgz("../../Vijay_mouse/baseline/save/heart.df.final") 
 vijay.heart.groups <- c("t5", "t4", "t3")
-vijay.heart.reduce <- rowwise(vijay.heart) %>%
-    mutate(pp.t3 = mean(pp.tgwt.t3, pp.doxnd.t3),
-           logFC.t3 = mean(logFC.tgwt.t3, logFC.doxnd.t3),
-           pp.t4 = mean(pp.tgwt.t4, pp.doxnd.t4),
-           logFC.t4 = mean(logFC.tgwt.t4, logFC.doxnd.t4),
-           pp.t5 = mean(pp.tgwt.t5, pp.doxnd.t5),
-           logFC.t5 = mean(logFC.tgwt.t5, logFC.doxnd.t5)) %>%
-    select(Symbol, Log.Bayes.Factor, matches("t3|t4|t5"))
+vijay.heart.reduce <- select(vijay.heart, Symbol, Log.Bayes.Factor, matches("t3|t4|t5"))
 vijay.heart.reduce$sig.t3 <- vijay.heart.reduce$Log.Bayes.Factor > 0.5 &
     vijay.heart.reduce$pp.t3 > 0.95 &
     (sign(vijay.heart.reduce$logFC.doxnd.t3) == sign(vijay.heart.reduce$logFC.tgwt.t3))
@@ -200,14 +193,7 @@ rownames(vijay.heart.down.genecount.fds) <- vijay.heart.groups
 #DRG
 vijay.drg <- ReadRDSgz("../../Vijay_mouse/baseline/save/drg.df.final") 
 vijay.drg.groups <- c("t5", "t4", "t3")
-vijay.drg.reduce <- rowwise(vijay.drg) %>%
-    mutate(pp.t3 = mean(pp.tgwt.t3, pp.doxnd.t3),
-           logFC.t3 = mean(logFC.tgwt.t3, logFC.doxnd.t3),
-           pp.t4 = mean(pp.tgwt.t4, pp.doxnd.t4),
-           logFC.t4 = mean(logFC.tgwt.t4, logFC.doxnd.t4),
-           pp.t5 = mean(pp.tgwt.t5, pp.doxnd.t5),
-           logFC.t5 = mean(logFC.tgwt.t5, logFC.doxnd.t5)) %>%
-    select(Symbol, Log.Bayes.Factor, matches("t3|t4|t5"))
+vijay.drg.reduce <- select(vijay.drg, Symbol, Log.Bayes.Factor, matches("t3|t4|t5"))
 vijay.drg.reduce$sig.t3 <- vijay.drg.reduce$Log.Bayes.Factor > 0.5 &
     vijay.drg.reduce$pp.t3 > 0.95 &
     (sign(vijay.drg.reduce$logFC.doxnd.t3) == sign(vijay.drg.reduce$logFC.tgwt.t3))
@@ -256,14 +242,7 @@ rownames(vijay.drg.down.genecount.fds) <- str_c("drg.", vijay.drg.groups)
 #Cerebellum
 vijay.cerebellum <- ReadRDSgz("../../Vijay_mouse/baseline/save/cerebellum.df.final") 
 vijay.cerebellum.groups <- c("t5", "t4", "t3")
-vijay.cerebellum.reduce <- rowwise(vijay.cerebellum) %>%
-    mutate(pp.t3 = mean(pp.tgwt.t3, pp.doxnd.t3),
-           logFC.t3 = mean(logFC.tgwt.t3, logFC.doxnd.t3),
-           pp.t4 = mean(pp.tgwt.t4, pp.doxnd.t4),
-           logFC.t4 = mean(logFC.tgwt.t4, logFC.doxnd.t4),
-           pp.t5 = mean(pp.tgwt.t5, pp.doxnd.t5),
-           logFC.t5 = mean(logFC.tgwt.t5, logFC.doxnd.t5)) %>%
-    select(Symbol, Log.Bayes.Factor, matches("t3|t4|t5"))
+vijay.cerebellum.reduce <- select(vijay.cerebellum, Symbol, Log.Bayes.Factor, matches("t3|t4|t5"))
 vijay.cerebellum.reduce$sig.t3 <- vijay.cerebellum.reduce$Log.Bayes.Factor > 0.5 &
     vijay.cerebellum.reduce$pp.t3 > 0.95 &
     (sign(vijay.cerebellum.reduce$logFC.doxnd.t3) == sign(vijay.cerebellum.reduce$logFC.tgwt.t3))
@@ -474,24 +453,50 @@ down.plot$Data.Comparison %<>% factor(levels = unique(down.plot$Data.Comparison)
 down.plot$Log.Bayes.Factor <- as.matrix(rbind(bf.down, bf.down.fds)) %>% as.numeric
 
 combined.plot <- rbind(up.plot, down.plot)
-combined.plot$Human.Comparison %<>% factor(levels = c(down.format.df$Human.Comparison, up.format.df$Human.Comparison))
+combined.plot$Human.Comparison %<>% factor(levels = c(as.character(down.format.df$Human.Comparison), as.character(up.format.df$Human.Comparison)))
 
-CairoPDF("combined.heatmap", width = 10.0, height = 6, bg = "transparent")
-p <- ggplot(combined.plot, aes(Data.Comparison, Human.Comparison, label = Format.BF, fill = Log.Bayes.Factor)) + 
+CairoPDF("up.heatmap", width = 9.0, height = 2.5, bg = "transparent")
+p <- ggplot(up.plot, aes(Data.Comparison, Human.Comparison, label = Format.BF, fill = Log.Bayes.Factor)) + 
     geom_raster() + 
     geom_text() + 
-    theme_bw() + theme(axis.title.x = element_blank(), 
-                       axis.title.y = element_blank(),
-                       axis.ticks.x = element_blank(), 
-                       axis.ticks.y = element_blank(),
-                       panel.grid.major = element_blank(), 
-                       panel.grid.minor = element_blank(),
-                       panel.background = element_blank(), 
-                       panel.border = element_blank(),
-                       plot.background = element_blank(), 
-                       plot.title = element_text(hjust = 0.5),
-                       axis.text.x = element_text(angle = 45, hjust = 1)) + 
-    scale_fill_gradient(low =  "white", high = muted('red'), guide = guide_legend(title = "logBF"))
+    theme_bw() + 
+    theme(axis.title.x = element_blank(), 
+           axis.title.y = element_blank(),
+           axis.ticks.x = element_blank(), 
+           axis.ticks.y = element_blank(),
+           axis.text.x = element_blank(),
+           panel.grid.major = element_blank(), 
+           panel.grid.minor = element_blank(),
+           panel.background = element_blank(), 
+           panel.border = element_blank(),
+           plot.background = element_blank(), 
+           plot.title = element_text(hjust = 0.5)) + 
+    scale_fill_gradient(limits = c(0, max(up.plot$Log.Bayes.Factor)), 
+                        low =  "white", high = muted('red'), guide = guide_legend(title = "logBF")) +
+    ggtitle("Upregulated")
+print(p)
+dev.off()
+
+CairoPDF("down.heatmap", width = 8.5, height = 4.0, bg = "transparent")
+p <- ggplot(down.plot, aes(Data.Comparison, Human.Comparison, label = Format.BF, fill = Log.Bayes.Factor)) + 
+    geom_raster() + 
+    geom_text() + 
+    theme_bw() + 
+    theme(axis.title.x = element_blank(), 
+           axis.title.y = element_blank(),
+           axis.ticks.x = element_blank(), 
+           axis.ticks.y = element_blank(),
+           legend.position = "none",
+           panel.grid.major = element_blank(), 
+           panel.grid.minor = element_blank(),
+           panel.background = element_blank(), 
+           panel.border = element_blank(),
+           plot.background = element_blank(), 
+           plot.title = element_text(hjust = 0.5),
+           axis.text.x = element_text(angle = 45, hjust = 1)) + 
+    scale_fill_gradient(limits = c(0, max(up.plot$Log.Bayes.Factor)), 
+                        low =  "white", high = muted('red'), guide = guide_legend(title = "logBF")) +
+    ggtitle("Downregulated")
 print(p)
 dev.off()
 
@@ -521,54 +526,70 @@ down.supp.plot$Data.Comparison %<>% factor %>%
 down.supp.plot$Data.Comparison %<>% factor(levels = unique(down.supp.plot$Data.Comparison))
 down.supp.plot$Log.Bayes.Factor <- as.matrix(rbind(bf.supp.down, bf.supp.down.fds)) %>% as.numeric
 
-combined.supp.plot <- rbind(up.supp.plot, down.supp.plot)
-combined.supp.plot$Human.Comparison %<>% factor(levels = c(as.character(down.supp.format.df$Human.Comparison), as.character(up.supp.format.df$Human.Comparison)))
+#combined.supp.plot <- rbind(up.supp.plot, down.supp.plot)
+#combined.supp.plot$Human.Comparison %<>% factor(levels = c(as.character(down.supp.format.df$Human.Comparison), as.character(up.supp.format.df$Human.Comparison)))
 
-CairoPDF("combined.supp.heatmap", width = 10.0, height = 6, bg = "transparent")
-p <- ggplot(combined.supp.plot, aes(Data.Comparison, Human.Comparison, label = Format.BF, fill = Log.Bayes.Factor)) + 
+#CairoPDF("combined.supp.heatmap", width = 10.0, height = 6, bg = "transparent")
+#p <- ggplot(combined.supp.plot, aes(Data.Comparison, Human.Comparison, label = Format.BF, fill = Log.Bayes.Factor)) + 
+    #geom_raster() + 
+    #geom_text() + 
+    #theme_bw() + 
+    #theme(axis.title.x = element_blank(), 
+          #axis.title.y = element_blank(),
+          #axis.ticks.x = element_blank(), 
+          #axis.ticks.y = element_blank(),
+          #panel.grid.major = element_blank(), 
+          #panel.grid.minor = element_blank(),
+          #panel.background = element_blank(), 
+          #panel.border = element_blank(),
+          #plot.background = element_blank(), 
+          #plot.title = element_text(hjust = 0.5),
+          #axis.text.x = element_text(angle = 45, hjust = 1)) + 
+    #scale_fill_gradient(low =  "white", high = muted('red'), guide = guide_legend(title = "logBF"))
+#print(p)
+#dev.off()
+
+CairoPDF("up.supp.heatmap", width = 9.0, height = 2.5, bg = "transparent")
+p <- ggplot(up.supp.plot, aes(Data.Comparison, Human.Comparison, label = Format.BF, fill = Log.Bayes.Factor)) + 
     geom_raster() + 
     geom_text() + 
     theme_bw() + 
     theme(axis.title.x = element_blank(), 
-          axis.title.y = element_blank(),
-          axis.ticks.x = element_blank(), 
-          axis.ticks.y = element_blank(),
-          panel.grid.major = element_blank(), 
-          panel.grid.minor = element_blank(),
-          panel.background = element_blank(), 
-          panel.border = element_blank(),
-          plot.background = element_blank(), 
-          plot.title = element_text(hjust = 0.5),
-          axis.text.x = element_text(angle = 45, hjust = 1)) + 
-    scale_fill_gradient(low =  "white", high = muted('red'), guide = guide_legend(title = "logBF"))
+           axis.title.y = element_blank(),
+           axis.ticks.x = element_blank(), 
+           axis.ticks.y = element_blank(),
+           axis.text.x = element_blank(),
+           panel.grid.major = element_blank(), 
+           panel.grid.minor = element_blank(),
+           panel.background = element_blank(), 
+           panel.border = element_blank(),
+           plot.background = element_blank(), 
+           plot.title = element_text(hjust = 0.5)) + 
+    scale_fill_gradient(limits = c(0, max(up.plot$Log.Bayes.Factor)), 
+                        low =  "white", high = muted('red'), guide = guide_legend(title = "logBF")) +
+    ggtitle("Upregulated")
 print(p)
 dev.off()
 
-#up.plot.reduce <- filter(up.plot, !grepl("Chandran mouse cerebellum|Chandran mouse DRG", Data.Comparison))
-#CairoPDF("up.heatmap", width = 5.5, height = 2.0, bg = "transparent")
-#p <- ggplot(up.plot, aes(Data.Comparison, Human.Comparison, label = Format.BF, fill = Log.Bayes.Factor)) + geom_raster() + geom_text() + theme_bw()
-#p <- p + theme(axis.title.x = element_blank(), axis.title.y = element_blank()) 
-#p <- p + theme(plot.margin = unit(c(1,1,2,1), "lines")) + theme(plot.title = element_text(hjust = 0.5))
-#p <- p + theme(axis.ticks.x = element_blank(), axis.ticks.y = element_blank())
-#p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-#p <- p + theme(panel.background = element_blank(), panel.border = element_blank())
-#p <- p + theme(plot.background = element_blank(), legend.background = element_blank())
-#p <- p + theme(axis.text.x = element_blank(), legend.title = element_text(hjust = 0) )
-#p <- p + scale_fill_gradient2(low = muted('blue'), mid = "white", high = muted('red'), guide = guide_legend(title = expression(atop(Log[10], 'Bayes Factor'))))
-#p <- p + ggtitle("Upregulated")
-#print(p)
-#dev.off()
-
-#down.plot.reduce <- filter(down.plot, !grepl("Chandran mouse cerebellum|Chandran mouse DRG", Data.Comparison))
-#CairoPDF("down.heatmap.reduce", width = 5.5, height = 3.5, bg = "transparent")
-#p <- ggplot(down.plot.reduce, aes(Data.Comparison, Human.Comparison, label = Format.BF, fill = Bayes.Factor)) + geom_raster() + geom_text() + theme_bw()
-#p <- p + theme(axis.title.x = element_blank(), axis.title.y = element_blank()) + theme(plot.margin = unit(c(1,1,1,1), "lines"))
-#p <- p + theme(axis.ticks.x = element_blank(), axis.ticks.y = element_blank()) + theme(plot.title = element_text(hjust = 0.5))
-#p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-#p <- p + theme(panel.background = element_blank(), panel.border = element_blank())
-#p <- p + theme(plot.background = element_blank(), legend.background = element_blank())
-#p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1))
-#p <- p + scale_fill_gradient2(low = muted('blue'), mid = "white", high = muted('red'), guide = guide_legend(title = expression(atop(Log[10], 'Bayes Factor'))))
-#p <- p + ggtitle("Downregulated")
-#print(p)
-#dev.off()
+CairoPDF("down.supp.heatmap", width = 8.5, height = 4.0, bg = "transparent")
+p <- ggplot(down.supp.plot, aes(Data.Comparison, Human.Comparison, label = Format.BF, fill = Log.Bayes.Factor)) + 
+    geom_raster() + 
+    geom_text() + 
+    theme_bw() + 
+    theme(axis.title.x = element_blank(), 
+           axis.title.y = element_blank(),
+           axis.ticks.x = element_blank(), 
+           axis.ticks.y = element_blank(),
+           legend.position = "none",
+           panel.grid.major = element_blank(), 
+           panel.grid.minor = element_blank(),
+           panel.background = element_blank(), 
+           panel.border = element_blank(),
+           plot.background = element_blank(), 
+           plot.title = element_text(hjust = 0.5),
+           axis.text.x = element_text(angle = 45, hjust = 1)) + 
+    scale_fill_gradient(limits = c(0, max(up.plot$Log.Bayes.Factor)), 
+                        low =  "white", high = muted('red'), guide = guide_legend(title = "logBF")) +
+    ggtitle("Downregulated")
+print(p)
+dev.off()

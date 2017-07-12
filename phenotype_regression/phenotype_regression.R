@@ -289,7 +289,7 @@ BayesPlot <- function(gene.df, filename, threshold, plot.title, posterior.column
 }
 
 BayesWorkbook <- function(de.table, filename) { 
-    bf.cols <- colnames(de.table) %>% str_detect("Log.Bayes.Factor") %>% which
+    bf.cols <- colnames(de.table) %>% str_detect("logBF") %>% which
     pp.cols <- colnames(de.table) %>% str_detect("pp") %>% which
     cor.cols <- colnames(de.table) %>% str_detect("coef") %>% which
 
@@ -371,19 +371,20 @@ EnrichrPlot <- function(enrichr.df, enrichr.expr, prefix, plot.title, plot.heigh
         gather(Direction, Length, -Format.Name) 
 
     p <- ggplot(enrichr.df.plot, aes(Format.Name, Length, fill = Direction))  + 
-        geom_bar(stat = "identity", size = 1)  + 
+        geom_bar(stat = "identity", color = "black")  + 
         scale_fill_discrete(name = "Direction", labels = c("Up", "Down")) + 
         coord_flip() + 
         theme_bw() + 
         theme(panel.grid.major = element_blank(), 
               panel.grid.minor = element_blank(),
-              panel.border = element_rect(color = "black", size = 1),  
+              panel.border = element_blank(),  
               plot.background = element_blank(), 
               plot.title = element_text(hjust = 0.5),
               legend.background = element_blank(), 
               axis.title.y = element_blank(), 
               axis.ticks.y = element_blank(), 
-              axis.text.y = element_text(size = 12)) +
+              axis.text.y = element_text(size = 12),
+              axis.line.x = element_line()) +
         ylab("logBF") + ggtitle(plot.title)
 
     CairoPDF(str_c(prefix, ".enrichr"), height = plot.height, width = plot.width, bg = "transparent")
@@ -521,8 +522,7 @@ SaveRDSgz(model.fds, "./save/model.fds.rda")
 bf.fds <- map(model.fds, extractBF) %>%
     map(extract2, "bf") %>% 
     map_dbl(reduce, divide_by) %>% log10
-bf.fds.df <- tibble(Symbol = featureNames(rmcov.lumi), Log.Bayes.Factor = bf.fds)
-
+bf.fds.df <- tibble(Symbol = featureNames(rmcov.lumi), logBF = bf.fds)
 
 fds.pp <- mclapply(model.fds, GetPosteriorProbability, "FDS", 10000, mc.cores = 8) %>%
     reduce(rbind) %>% as_tibble
@@ -537,40 +537,39 @@ colnames(bm.table) <- c("Symbol", "Definition")
 bm.table %<>% filter(!duplicated(Symbol))
 
 bf.fds.annot <- left_join(bf.fds.df, fds.pp) %>% left_join(bm.table) %>%
-    select(Symbol, Definition, Log.Bayes.Factor, coef.FS, pp.FS) %>%
-    arrange(desc(Log.Bayes.Factor))
+    select(Symbol, Definition, logBF, coef.FS, pp.FS) %>%
+    mutate_at(vars(logBF, coef.FS), signif, digits = 3) %>%
+    arrange(desc(logBF))
 SaveRDSgz(bf.fds.annot, "./save/bf.fds.annot.rda")
-bf.fds.sig <- filter(bf.fds.annot, Log.Bayes.Factor > 0.5 & pp.FS > 0.95)
+bf.fds.sig <- filter(bf.fds.annot, logBF > 0.5 & pp.FS > 0.95)
 bf.fds.fdr <- mean(1 - bf.fds.sig$pp.FS)
 BayesWorkbook(bf.fds.annot, "bf.fds.xlsx")
-BayesPlot(bf.fds.annot, "fds_uplot", 0.5, "Functional Stage", "Log.Bayes.Factor", "Median", 
-          "Regression Coefficient", "Log Bayes Factor")
+BayesPlot(bf.fds.annot, "fds_uplot", 0.5, "Functional Stage", "logBF", "coef.FS", 
+          "Regression Coefficient", "logBF")
 
 #Get GAA regression
 catch <- mclapply(featureNames(rmcov.lumi), GAABayes, exprs(rmcov.lumi), 
                   select(pData(rmcov.lumi), GAA1, Sex, RIN), mc.cores = 8)
 model.gaa <- list.files("./save/model", full.names = TRUE) %>% map(readRDS) 
 SaveRDSgz(model.gaa, "./save/model.gaa.rda")
+names(model.gaa) <- featureNames(rmcov.lumi)
 bf.gaa <- map(model.gaa, extractBF) %>%
     map(extract2, "bf") %>% 
     map_dbl(reduce, divide_by) %>% log10
-bf.gaa.df <- tibble(Symbol = featureNames(rmcov.lumi), Log.Bayes.Factor = bf.gaa)
-posterior.gaa <- list.files("./save/posterior", full.names = TRUE) %>% map(readRDS)
-SaveRDSgz(posterior.gaa, "./save/posterior.gaa.rda")
+bf.gaa.df <- tibble(Symbol = featureNames(rmcov.lumi), logBF = bf.gaa)
 
-posterior.gaa.df <- map(posterior.gaa, magrittr::extract, TRUE, 2) %>% 
-    map(quantile, c(0.025, 0.5, 0.975)) %>% 
-    reduce(rbind) %>% as.tibble %>%
-    set_colnames(c("CI_2.5", "Median", "CI_97.5")) %>%
-    mutate(Symbol = featureNames(export.lumi))
-bf.gaa.final.df <- left_join(posterior.gaa.df, bf.gaa.df) %>% 
-    select(Symbol, Log.Bayes.Factor, CI_2.5, Median, CI_97.5) %>%
-    arrange(desc(Log.Bayes.Factor)) 
-bf.gaa.sig <- filter(bf.gaa.final.df, Log.Bayes.Factor > 0.5) %>% arrange(desc(abs(Median)))
-SaveRDSgz(bf.gaa.posterior.df, "./save/bf.gaa.posterior.df.rda")
+gaa.pp <- mclapply(model.gaa, GetPosteriorProbability, "GAA1", 10000, mc.cores = 8) %>%
+    reduce(rbind) %>% as_tibble
+colnames(gaa.pp) <- c("coef.GAA", "pp.GAA")
+gaa.pp$Symbol <- featureNames(rmcov.lumi)
 
-bf.gaa.annot <- left_join(bf.gaa.final.df, bm.table) %>% 
-    select(Symbol, Definition, Log.Bayes.Factor, Median, CI_2.5, CI_97.5)
+bf.gaa.annot <- left_join(bf.gaa.df, gaa.pp) %>% left_join(bm.table) %>%
+    select(Symbol, Definition, logBF, coef.GAA, pp.GAA) %>%
+    arrange(desc(logBF))
+bf.gaa.sig <- filter(bf.gaa.annot, logBF > 0.5 & pp.GAA > 0.95)
+bf.gaa.fdr <- mean(1 - bf.gaa.sig$pp.GAA)
+SaveRDSgz(bf.gaa.annot, "./save/bf.gaa.annot.rda")
+
 BayesWorkbook(bf.gaa.annot, "bf.gaa.xlsx")
 BayesPlot(bf.gaa.final.df, "gaa_uplot", 0.5, "GAA1", "Log.Bayes.Factor", "Median", 
           "Regression Coefficient", "Log Bayes Factor")
@@ -582,23 +581,20 @@ SaveRDSgz(model.duration, "./save/model.duration.rda")
 bf.duration <- map(model.duration, extractBF) %>%
     map(extract2, "bf") %>% 
     map_dbl(reduce, divide_by) %>% log10
-bf.duration.df <- tibble(Symbol = featureNames(rmcov.lumi), Log.Bayes.Factor = bf.duration)
-posterior.duration <- list.files("./save/posterior", full.names = TRUE) %>% map(readRDS)
-SaveRDSgz(posterior.duration, "./save/posterior.duration.rda")
+bf.duration.df <- tibble(Symbol = featureNames(rmcov.lumi), logBF = bf.duration)
 
-posterior.duration.df <- map(posterior.duration, magrittr::extract, TRUE, 2) %>% 
-    map(quantile, c(0.025, 0.5, 0.975)) %>% 
-    reduce(rbind) %>% as.tibble %>%
-    set_colnames(c("CI_2.5", "Median", "CI_97.5")) %>%
-    mutate(Symbol = featureNames(export.lumi))
-bf.duration.final.df <- left_join(posterior.duration.df, bf.duration.df) %>% 
-    select(Symbol, Log.Bayes.Factor, CI_2.5, Median, CI_97.5) %>%
-    arrange(desc(Log.Bayes.Factor)) 
-bf.duration.sig <- filter(bf.duration.final.df, Log.Bayes.Factor > 0.5) %>% arrange(desc(abs(Median)))
-SaveRDSgz(bf.duration.posterior.df, "./save/bf.duration.posterior.df.rda")
+duration.pp <- mclapply(model.duration, GetPosteriorProbability, "Duration", 10000, mc.cores = 8) %>%
+    reduce(rbind) %>% as_tibble
+colnames(duration.pp) <- c("coef.Duration", "pp.Duration")
+duration.pp$Symbol <- featureNames(rmcov.lumi)
 
-bf.duration.annot <- left_join(bf.duration.final.df, bm.table) %>% 
-    select(Symbol, Definition, Log.Bayes.Factor, Median, CI_2.5, CI_97.5)
+bf.duration.annot <- left_join(bf.duration.df, duration.pp) %>% left_join(bm.table) %>%
+    select(Symbol, Definition, logBF, coef.Duration, pp.Duration) %>%
+    arrange(desc(logBF))
+bf.duration.sig <- filter(bf.duration.annot, logBF > 0.5 & pp.Duration > 0.95)
+bf.duration.fdr <- mean(1 - bf.duration.sig$pp.Duration)
+SaveRDSgz(bf.duration.annot, "./save/bf.duration.annot.rda")
+
 BayesWorkbook(bf.duration.annot, "bf.duration.xlsx")
 BayesPlot(bf.duration.final.df, "duration_uplot", 0.5, "Duration", "Log.Bayes.Factor", "Median", "Regression Coefficient", "Log Bayes Factor")
 

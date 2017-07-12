@@ -126,9 +126,9 @@ EnrichrPlot <- function(enrichr.df, filename, plot.title, plot.height = 5, plot.
 
     p <- ggplot(enrichr.df.plot, aes(Format.Name, Log.Bayes.Factor)) 
     if (color == "default") {
-        p <- p + geom_bar(stat = "identity") 
+        p <- p + geom_bar(stat = "identity", color = "black") 
     } else {
-        p <- p + geom_bar(stat = "identity", fill = color) 
+        p <- p + geom_bar(stat = "identity", color = "black", fill = color) 
     }
 
     p <- p + coord_flip() + 
@@ -136,12 +136,14 @@ EnrichrPlot <- function(enrichr.df, filename, plot.title, plot.height = 5, plot.
          theme(legend.position = "none", 
                panel.grid.major = element_blank(),
                panel.grid.minor = element_blank(),
-               panel.border = element_rect(color = "black", size = 1),
+               panel.border = element_blank(),
                plot.background = element_blank(),
                plot.title = element_text(hjust = 0.5),
                axis.title.y = element_blank(), 
-               axis.ticks.y = element_blank()) + 
-        ylab(expression(paste(Log[10], ' Bayes Factor'))) + 
+               axis.ticks.y = element_blank(),
+               axis.line.x = element_line(),
+               axis.text.y = element_text(size = 12)) + 
+        ylab(expression(paste("logBF"))) + 
         ggtitle(plot.title)
 
     CairoPDF(str_c(filename, ".enrichr"), height = plot.height, width = plot.width, bg = "transparent")
@@ -154,6 +156,127 @@ GetKscaled <- function(gene.list, module.membership) {
         select(Symbol, kscaled) %>% 
         arrange(desc(kscaled))
 }
+
+GetCombn <- function(level.vectors, num.variables) {
+    map(1:(num.variables-1), combn, x = level.vectors)
+}
+
+ConcatStrings <- function(string.vector, sep.char) {
+    if (length(string.vector) > 1) {
+        string.return <- str_c(string.vector, collapse = sep.char)
+        return(string.return)
+    } else {
+        return(string.vector)
+    }
+}
+
+CombineColnames <- function(interaction.list, variable.list) {
+    map2(variable.list, interaction.list, str_c, sep = "-") 
+}
+
+ExtractContrasts <- function(contrasts.vector) {
+    contrasts.lhs <- contrasts.vector[contrasts.vector == 1]
+    contrasts.rhs <- contrasts.vector[contrasts.vector == -1]
+    c(names(contrasts.lhs), names(contrasts.rhs))
+}
+
+ContrastCoef <- function(contrasts.pair, full.estimates) {
+    contrast.estimate <- full.estimates[contrasts.pair[1]] - full.estimates[contrasts.pair[2]]
+    contrast.estimate
+}
+
+GetPosteriorProb <- function(contrasts.vector) {
+    contrast.pp <- which(contrasts.vector != 0 & (sign(contrasts.vector) == sign(median(contrasts.vector)))) %>% 
+        length %>% divide_by(length(contrasts.vector))
+    contrast.pp
+}
+
+SplitContrasts <- function(column.index, contrasts.matrix) {
+    contrasts.matrix[,column.index]
+}
+
+EstimateSums <- function(interaction.column, column.list, estimate.df) {
+    estimate.reduce <- as.matrix(estimate.df)[,c("mu", interaction.column, column.list)]
+    rowSums(estimate.reduce)
+}
+
+CreateFilterString <- function(joint.hypothesis) {
+    filter.string <- str_c(joint.hypothesis, " != 0 & (sign(", joint.hypothesis, ") == sign(stats::median(", joint.hypothesis, ")))")
+    filter.string
+}
+
+JointHypothesisProb <- function(joint.hypothesis, contrasts.estimates) {
+    estimate.select <- select_(contrasts.estimates, .dots = joint.hypothesis)
+    filter.string <- map(joint.hypothesis, CreateFilterString) %>% str_c(collapse = " & ")
+    hypothesis.filter <- filter_(estimate.select, filter.string)
+    pp.hypothesis <- nrow(hypothesis.filter) / nrow(estimate.select)
+    logFC.hypothesis <- as.matrix(estimate.select) %>% median
+    list(logFC = logFC.hypothesis, pp = pp.hypothesis)
+}
+
+#This is a very complex function with multiple helper functions - modify with care!
+PairwiseTest <- function(model.de, variables, contrasts.matrix, n.iterations, joint.hypotheses = list()) {
+    set.seed(12345)
+    gene.posterior <- posterior(model.de, index = 1, iterations = n.iterations) %>% as_tibble
+    if (length(variables) > 1) {
+        variables.key <- str_c(variables, collapse = ":")
+        variables.filter <- str_c(variables, collapse = "|")
+        posterior.reduce <- select(gene.posterior, -matches("g_"), -sig2) %>%
+            select(mu, matches(variables.filter))
+
+        #Figure out all columns to be added to estimate
+        variables.combn <- map(1:(length(variables)-1), combn, x = variables) %>%
+            map(apply, 2, ConcatStrings, ":") #compute different combinations of variables
+        colnames.interaction <- str_subset(colnames(posterior.reduce), variables.key) #get all column names of full interaction
+        colnames.interaction.format <- str_replace(colnames.interaction, "^.*\\-", "") %>% 
+            str_replace_all("\\.&\\.", "")
+        interaction.levels <- str_split_fixed(colnames.interaction, "-", 2) %>% 
+            magrittr::extract(,2) %>% 
+            str_split_fixed(".&.", length(variables)) %>%
+            apply(1, GetCombn, length(variables)) %>% 
+            map(map, apply, 2, ConcatStrings, ".&.") #get all combinations of levels for each interaction variable
+        final.colnames <- map(interaction.levels, CombineColnames, variables.combn) %>% 
+            map(unlist) #concatenate final column names
+
+        #Add together columns correctly
+        full.estimates <- map2(colnames.interaction, final.colnames, EstimateSums, posterior.reduce) %>%
+            reduce(cbind) %>% 
+            set_colnames(colnames.interaction.format) %>% 
+            as_tibble %>%
+            select_(.dots = rownames(contrasts.matrix))
+    } else {
+        full.estimates <- select(gene.posterior, -matches("g_"), -sig2) %>%
+            select(mu, contains(variables)) %>% 
+            mutate_all(add, y = gene.posterior$mu) %>%
+            select(-mu) 
+        colnames(full.estimates) %<>% str_replace_all("^.*\\-", "")
+    }
+    
+    #gene.quantile <- map(full.estimates, quantile, c(1-probability, probability)) %>% 
+        #map(as.vector) %>% map(set_names, c("CI_lo", "CI_hi"))
+
+    contrasts.pairs <- apply(contrasts.matrix, 2, ExtractContrasts) %>% as.matrix
+    contrasts.list <- map(1:ncol(contrasts.pairs), SplitContrasts, contrasts.pairs)
+    contrasts.estimates <- apply(contrasts.pairs, 2, ContrastCoef, full.estimates) %>% 
+        reduce(cbind) %>% set_colnames(colnames(contrasts.matrix))
+
+    contrasts.pp <- apply(contrasts.estimates, 2, GetPosteriorProb)
+    names(contrasts.pp) <- str_c("pp.", colnames(contrasts.matrix))
+
+    logFC.contrasts <- colMedians(as.matrix(contrasts.estimates))
+    names(logFC.contrasts) <- str_c("logFC.", colnames(contrasts.matrix))
+
+    if (length(joint.hypotheses) > 0) {
+        joint.list <- map(joint.hypotheses, JointHypothesisProb, contrasts.estimates)
+        joint.logFC <- map_dbl(joint.list, extract2, "logFC") %>% set_names(str_c("logFC.", names(joint.hypotheses)))
+        joint.pp <- map_dbl(joint.list, extract2, "pp") %>% set_names(str_c("pp.", names(joint.hypotheses)))
+        return(c(logFC.contrasts, joint.logFC, contrasts.pp, joint.pp))
+    } else {
+        return(c(logFC.contrasts, contrasts.pp))
+    }
+
+}
+
 
 test <- lapply(ls(), function(thing) print(object.size(get(thing)), units = 'auto')) 
 names(test) <- ls()
@@ -297,14 +420,24 @@ ME.genes.rmcov <- data.frame(ME.genes - (covar.coefs[,c("Sex-MALE","Age-Age")] %
 SaveRDSgz(ME.genes.rmcov, "./save/ME.genes.rmcov.rda")
 
 bayes.status <- map(ME.genes.rmcov, DEBayes, select(lumi.pdata, Status, RIN)) 
+names(bayes.status) <- colnames(ME.genes.rmcov)
 bf.status <- map(bayes.status, extractBF) %>% 
     map(extract2, "bf") %>% 
     map_dbl(reduce, divide_by) %>%
     map_dbl(log10)
-posterior.status <- map(bayes.status, posterior, index = 1, iterations = 10000) 
+bf.status.df <- tibble(Eigengene = names(bf.status), logBF = bf.status)
+
+status.model <- model.matrix(~ 0 + Status, lumi.pdata)
+colnames(status.model) %<>% str_replace_all("Status", "")
+contrasts.matrix <- makeContrasts(pco = Patient - Control, pca = Patient - Carrier, cc = Carrier - Control, levels = status.model)
+
+status.probs <- map(bayes.status, PairwiseTest, "Status", contrasts.matrix, 10000) %>% 
+    reduce(rbind) %>% as_tibble
+status.probs$Eigengene <- colnames(ME.genes.rmcov)
+bayes.status.final <- left_join(bf.status.df, status.probs)
 
 #Generate network statistics
-all.degrees <- intramodularConnectivity(adjacency.expr, module.colors)
+All.degrees <- intramodularConnectivity(adjacency.expr, module.colors)
 gene.info <- data.frame(Symbol = rownames(all.degrees), 
                         Module = module.colors, all.degrees, stringsAsFactors = FALSE) %>% arrange(Module)
 gene.info$kscaled <- by(gene.info, gene.info$Module, select, kWithin) %>% 
@@ -386,4 +519,4 @@ magenta.kegg.final <- slice(magenta.kegg, c(3,6))
 magenta.reactome.final <- slice(magenta.reactome, c(3,12))
 
 magenta.enrichr <- rbind(magenta.gobiol.final, magenta.gomole.final, magenta.kegg.final, magenta.reactome.final)
-EnrichrPlot(magenta.enrichr, "magenta", "Magenta Module", plot.height = 4, plot.width = 5.5)
+EnrichrPlot(magenta.enrichr, "magenta", "Magenta Module", color = "#CC00CC", plot.height = 4, plot.width = 6.5)

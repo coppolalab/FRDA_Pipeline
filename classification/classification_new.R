@@ -67,7 +67,8 @@ bm.table <- getBM(attributes = c('hgnc_symbol', 'description'), filters = 'hgnc_
 bm.table$description %<>% str_replace_all(" \\[.*\\]$", "")
 colnames(bm.table) <- c("Symbol", "Definition")
 lasso.annot <- left_join(status.lasso.df, bm.table) %>% 
-    dplyr::select(Symbol, Definition, dplyr::contains("Coefficient")) 
+    dplyr::select(Symbol, Definition, dplyr::contains("Coefficient")) %>%
+    mutate_if(is.numeric, signif, digits = 3)
 ClassifierWorkbook(lasso.annot, "lasso.table.xlsx")
 
 svm.preds <- svm.final$pred
